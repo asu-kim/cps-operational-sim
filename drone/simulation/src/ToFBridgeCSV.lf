@@ -1,0 +1,121 @@
+target C
+
+preamble {=
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <errno.h>
+
+void lf_request_stop(void);
+
+static int line_has_alpha(const char* s) {
+  while (*s) {
+    if (isalpha((unsigned char)*s)) return 1;
+    s++;
+  }
+  return 0;
+}
+
+static int parse_first_number(const char* s, double* out) {
+  const char* p = s;
+  while (*p != '\0') {
+    char* end = NULL;
+    double v = strtod(p, &end);
+    if (end != p) {
+      *out = v;
+      return 0;
+    }
+    p++;
+  }
+  return -1;
+}
+=}
+
+reactor PyToF(
+  id:int=0,
+  label:string="sensor",
+  path:string="simulation/data/sensor.csv",
+  start_ms:time=20 ms,
+  period:time=20 ms,
+  verbose:int=0
+) {
+  timer poll(start_ms, period)
+  output value: double
+
+  state fp: FILE*
+  state line_no:int = 0
+  state sample_count:int = 0
+
+  reaction(startup) {=
+    self->fp = NULL;
+    self->line_no = 0;
+    self->sample_count = 0;
+
+    printf("[PyToFCSV:%d:%s] opening %s\n", self->id, self->label, self->path);
+    fflush(stdout);
+
+    self->fp = fopen(self->path, "r");
+    if (!self->fp) {
+      fprintf(stderr,
+              "[PyToFCSV:%d:%s] FAILED to open %s : %s\n",
+              self->id, self->label, self->path, strerror(errno));
+      fflush(stderr);
+      lf_request_stop();
+      return;
+    }
+  =}
+
+  reaction(shutdown) {=
+    if (self->fp) fclose(self->fp);
+    self->fp = NULL;
+  =}
+
+  reaction(poll) -> value {=
+    if (!self->fp) return;
+
+    char line[256];
+
+    while (1) {
+      if (!fgets(line, sizeof(line), self->fp)) {
+        printf("[PyToFCSV:%d:%s] EOF on %s after %d samples\n",
+               self->id, self->label, self->path, self->sample_count);
+        fflush(stdout);
+
+        fclose(self->fp);
+        self->fp = NULL;
+        lf_request_stop();
+        return;
+      }
+
+      self->line_no += 1;
+
+      if (line[0] == '#') {
+        continue;
+      }
+
+      double v = 0.0;
+      if (parse_first_number(line, &v) == 0) {
+        self->sample_count += 1;
+        lf_set(value, v);
+
+        if (self->verbose) {
+          printf("[PyToFCSV:%d:%s] sample=%d value=%.3f\n",
+                 self->id, self->label, self->sample_count, v);
+          fflush(stdout);
+        }
+        return;
+      }
+
+      if (self->line_no == 1 && line_has_alpha(line)) {
+        continue;
+      }
+
+      if (self->verbose) {
+        printf("[PyToFCSV:%d:%s] skipped line %d\n",
+               self->id, self->label, self->line_no);
+        fflush(stdout);
+      }
+    }
+  =}
+}

@@ -1,0 +1,319 @@
+target C
+
+preamble {=
+  #include <math.h>
+  #include <stdio.h>
+=}
+
+reactor AvoidPlanner {
+  // ---------------- Ports ----------------
+  input front: double
+  input left: double
+  input right: double
+  input bottom: double
+  input top: double
+  // Optional command to initiate landing (present & nonzero -> land)
+  input land: int
+
+  output roll: int
+  output pitch: int
+  output yaw: int
+  output throttle: int
+  output aux1: int
+  output aux2: int
+
+  // Single global timer (used by all modes)
+  timer tick(0, 20 ms)
+
+  // ---------------- Tunables ----------------
+  state height_sp: double = 0.80
+  state thr_base:  int = 1450
+  state thr_min:   int = 1200
+  state thr_max:   int = 1700
+
+  state k_h_p: double = 950.0
+  state k_h_i: double = 180.0
+  state i_h_min: double = -250.0
+  state i_h_max: double =  250.0
+
+  state ceil_min_clear: double = 0.35
+  state ceil_soft_band: double = 0.20
+
+  state front_thresh: double = 0.35
+  state front_hard: double = 0.20
+
+  state side_target:  double = 0.50
+  state k_side: double = 250.0
+  state k_yaw:  double = 120.0
+
+  state pitch_fwd:  int = 1538
+  state pitch_slow: int = 1506
+  state pitch_back: int = 1460
+  state hover_confirm_ticks:int = 10
+
+  // ---------------- Per-mode scratch (reactor-level; reset on entry) ----------------
+  state ticks:int = 0
+  state takeoff:int  = 1300
+  state i_h:double = 0.0
+  state hover_ok:int = 0
+  state ok_count:int = 0
+
+  // Landing scratch
+  state land_thr:int = 1300
+  state land_touch:int = 0      // consecutive ticks on ground
+  state land_min_thr:int = 1080 // don't drop below this while descending
+  state land_step:int = 6       // throttle decrement per tick (≈300 us/s)
+
+  // Stage durations (ticks @ 50 Hz)
+  state t_neutral:int = 5
+  state t_arm:int     = 10
+  state t_takeoff:int = 15
+
+  // ---------------- Modes ----------------
+
+  initial mode Neutral {
+    reaction(reset) {=
+      self->ticks = 0;
+      self->takeoff = 1300;
+      self->i_h = 0.0;
+      self->hover_ok = 0;
+      self->ok_count = 0;
+      self->land_thr = 1300;
+      self->land_touch = 0;
+      printf("[AvoidPlanner] Neutral\n");
+    =}
+
+    reaction(tick) -> roll, pitch, yaw, throttle, aux1, aux2, reset(Arm) {=
+      lf_set(roll, 1500);
+      lf_set(pitch, 1500);
+      lf_set(yaw, 1500);
+      lf_set(throttle, 1000);
+      lf_set(aux1, 1000);   // disarmed
+      lf_set(aux2, 1800);   // ANGLE
+      if (++self->ticks >= self->t_neutral) {
+        lf_set_mode(Arm);
+      }
+    =}
+  }
+
+  mode Arm {
+    reaction(reset) {=
+      self->ticks = 0;
+      printf("[AvoidPlanner] Arm\n");
+    =}
+
+    reaction(tick) -> roll, pitch, yaw, throttle, aux1, aux2, reset(takeoff) {=
+      lf_set(roll, 1500);
+      lf_set(pitch, 1500);
+      lf_set(yaw, 1500);
+      lf_set(throttle, 1000);
+      lf_set(aux1, 1800);   // arm
+      lf_set(aux2, 1800);
+      if (++self->ticks >= self->t_arm) {
+        lf_set_mode(takeoff);
+        printf("[AvoidPlanner] Arm -> takeoff\n");
+      }
+    =}
+  }
+
+  mode takeoff {
+    reaction(reset) {=
+      self->ticks = 0;
+      self->takeoff  = 1300;
+      printf("[AvoidPlanner] takeoff\n");
+    =}
+
+    reaction(tick) -> roll, pitch, yaw, throttle, aux1, aux2, reset(Cruise) {=
+      if (self->takeoff < self->thr_base) self->takeoff += 5;
+      int rc_thr = self->takeoff;
+      if (rc_thr < self->thr_min) rc_thr = self->thr_min;
+      if (rc_thr > self->thr_max) rc_thr = self->thr_max;
+
+      lf_set(roll, 1500);
+      lf_set(pitch, 1500);
+      lf_set(yaw, 1500);
+      lf_set(throttle, rc_thr);
+      lf_set(aux1, 1800);
+      lf_set(aux2, 1800);
+
+      if (++self->ticks >= self->t_takeoff) {
+        lf_set_mode(Cruise);
+        printf("[AvoidPlanner] takeoff -> Cruise\n");
+      }
+    =}
+  }
+
+  mode Cruise {
+    reaction(reset) {=
+      self->i_h = 0.0;
+      self->hover_ok = 0;
+      self->ok_count = 0;
+      printf("[AvoidPlanner] Cruise\n");
+    =}
+
+    reaction(tick, land, front, left, right, bottom, top)
+             -> roll, pitch, yaw, throttle, aux1, aux2, reset(Landing) {=
+      // Landing request?
+      int land_req = (land->is_present && land->value != 0) ? 1 : 0;
+
+      double f = front->is_present  ? front->value  : NAN;
+      double l = left->is_present   ? left->value   : NAN;
+      double r = right->is_present  ? right->value  : NAN;
+      double b = bottom->is_present ? bottom->value : NAN;
+      double t = top->is_present    ? top->value    : NAN;
+
+      int rc_roll  = 1500;
+      int rc_pitch = 1500;
+      int rc_yaw   = 1500;
+      int rc_thr   = self->thr_base;
+      int rc_aux1  = 1800;
+      int rc_aux2  = 1800;
+
+      // Altitude PI
+      if (!isnan(b)) {
+        double eh = self->height_sp - b;
+        self->i_h += eh * 0.02 * self->k_h_i; // 20 ms tick
+        if (self->i_h < self->i_h_min) self->i_h = self->i_h_min;
+        if (self->i_h > self->i_h_max) self->i_h = self->i_h_max;
+        rc_thr = self->thr_base + (int)(self->k_h_p * eh + self->i_h);
+      }
+
+      // Ceiling clamp
+      if (!isnan(t)) {
+        if (t < self->ceil_min_clear) {
+          if (rc_thr > 1250) rc_thr = 1250;
+          rc_pitch = 1500; rc_yaw = 1500;
+        } else if (t < self->ceil_min_clear + self->ceil_soft_band) {
+          double frac = (t - self->ceil_min_clear) / self->ceil_soft_band;
+          if (frac < 0.0) frac = 0.0;
+          if (frac > 1.0) frac = 1.0;
+          int clamp = 1350 + (int)(250.0 * frac);
+          if (rc_thr > clamp) rc_thr = clamp;
+        }
+      }
+
+      if (rc_thr < self->thr_min) rc_thr = self->thr_min;
+      if (rc_thr > self->thr_max) rc_thr = self->thr_max;
+
+      // Confirm stable hover band once
+      if (!self->hover_ok) {
+        if (!isnan(b) && b > 0.6 && b < 1.2) {
+          if (++self->ok_count >= self->hover_confirm_ticks) {
+            self->hover_ok = 1;
+          }
+        } else {
+          self->ok_count = 0;
+        }
+      }
+
+      // Forward + avoidance
+      if (self->hover_ok) {
+        rc_pitch = self->pitch_fwd;
+
+        // Corridor-centering from side sensors
+        double roll_bias = 0.0;
+        if (!isnan(l)) roll_bias += (self->side_target - l);
+        if (!isnan(r)) roll_bias -= (self->side_target - r);
+
+        // If obstacle is ahead, slow down first.
+        // If it is very close, back away.
+        if (!isnan(f) && f < self->front_thresh) {
+          rc_pitch = self->pitch_slow;
+
+          if (f < self->front_hard) {
+            rc_pitch = self->pitch_back;
+          }
+
+          // Choose the side with more room.
+          // Positive => more room on the right.
+          double side_pref = 0.0;
+          if (!isnan(l) && !isnan(r)) {
+            side_pref = r - l;
+          } else if (!isnan(r)) {
+            side_pref = r - self->side_target;
+          } else if (!isnan(l)) {
+            side_pref = self->side_target - l;
+          }
+
+          // Add sidestep toward the open side
+          roll_bias += 0.8 * side_pref;
+
+          // Yaw toward the open side too
+          double closeness = self->front_thresh - f;
+          int yaw_delta = (int)(self->k_yaw * closeness);
+          if (yaw_delta < 25) yaw_delta = 25;
+          if (yaw_delta > 180) yaw_delta = 180;
+
+          if (side_pref >= 0.0) {
+            rc_yaw = 1500 + yaw_delta;   // turn right
+          } else {
+            rc_yaw = 1500 - yaw_delta;   // turn left
+          }
+        }
+
+        int roll_cmd = 1500 + (int)(self->k_side * roll_bias);
+        if (roll_cmd < 1380) roll_cmd = 1380;
+        if (roll_cmd > 1620) roll_cmd = 1620;
+        rc_roll = roll_cmd;
+      }
+
+      // Apply outputs
+      lf_set(roll, rc_roll);
+      lf_set(pitch, rc_pitch);
+      lf_set(yaw, rc_yaw);
+      lf_set(throttle, rc_thr);
+      lf_set(aux1, rc_aux1);
+      lf_set(aux2, rc_aux2);
+
+      // Transition to Landing if requested
+      if (land_req) {
+        lf_set_mode(Landing);
+        printf("[AvoidPlanner] Cruise -> Landing\n");
+      }
+    =}
+  }
+
+  mode Landing {
+    reaction(reset) {=
+      // Start landing from a safe throttle near hover
+      self->land_thr = (self->thr_base > 1350 ? 1350 : self->thr_base);
+      self->land_touch = 0;
+      printf("[AvoidPlanner] Landing\n");
+    =}
+
+    reaction(tick, bottom)
+             -> roll, pitch, yaw, throttle, aux1, aux2, reset(Neutral) {=
+      double b = bottom->is_present ? bottom->value : NAN;
+
+      // Neutral attitude, keep ANGLE, armed during descent
+      lf_set(roll, 1500);
+      lf_set(pitch, 1500);
+      lf_set(yaw, 1500);
+      lf_set(aux1, 1800);
+      lf_set(aux2, 1800);
+
+      // Ramp down throttle smoothly
+      if (self->land_thr > self->land_min_thr) self->land_thr -= self->land_step;
+
+      // If we see ground close, allow lower throttle to settle
+      if (!isnan(b) && b < 0.20 && self->land_thr > 1100) {
+        self->land_thr = 1100;
+      }
+
+      lf_set(throttle, self->land_thr);
+
+      // Touchdown detection: bottom distance < 8 cm for 0.3 s
+      if (!isnan(b) && b < 0.08) {
+        if (++self->land_touch >= 15) {
+          // Disarm and return to Neutral
+          lf_set(aux1, 1000);
+          lf_set(throttle, 1000);
+          lf_set_mode(Neutral);
+          printf("[AvoidPlanner] Landing -> Neutral (touchdown)\n");
+        }
+      } else {
+        self->land_touch = 0;
+      }
+    =}
+  }
+}

@@ -1,0 +1,174 @@
+target C
+
+preamble {=
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+typedef struct {
+    FILE* pipe;
+    int   bus;
+    int   addr;
+    int   rate;
+    int   timing_ms;
+} tof_proc_t;
+
+static int tof_start(tof_proc_t* tp, int bus, int addr, int rate, int timing_ms) {
+    tp->bus = bus; tp->addr = addr; tp->rate = rate; tp->timing_ms = timing_ms;
+    char cmd[256];
+    // safer: absolute path so we never depend on cwd
+    snprintf(cmd, sizeof(cmd),
+             "python3 ./lib/tof_reader.py --bus %d --addr 0x%02X --rate %d --timing_ms %d 2>/dev/null",
+             bus, addr, rate, timing_ms);
+    tp->pipe = popen(cmd, "r");
+    if (!tp->pipe) return -1;
+    int fd = fileno(tp->pipe);
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    return 0;
+}
+
+static int tof_read_latest(tof_proc_t* tp, double* out_m) {
+    if (!tp || !tp->pipe) return -2;
+    char buf[256];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, tp->pipe);
+    if (n == 0) return -1; // nothing yet
+    buf[n] = 0;
+
+    double v = 0.0;
+    int got = 0;
+    char* p = buf;
+    while (*p) {
+        char* end = NULL;
+        double x = strtod(p, &end);
+        if (end != p) { v = x; got = 1; p = end; } else { p++; }
+    }
+    if (got) { *out_m = v; return 0; }
+    return -3;
+}
+
+static void tof_stop(tof_proc_t* tp) {
+    if (tp && tp->pipe) { pclose(tp->pipe); tp->pipe = NULL; }
+}
+=}
+
+reactor PyToF(id:int=0, label:string="sensor", bus:int=22, 
+              addr:int=41, rate:int=20, timing_ms:int=100, 
+              start_ms:time=100 ms, verbose:int=0) {
+  // start after 100 ms so startup finishes before first poll
+  timer poll(start_ms, 20 ms)
+  output value: double
+
+  // initialize pointer container to 0
+  state tp: long = 0
+  state last_val: double
+
+  reaction(startup) {=
+    tof_proc_t* proc = (tof_proc_t*)malloc(sizeof(tof_proc_t));
+    if (!proc) { fprintf(stderr, "ToF malloc failed\n"); return; }
+    if (tof_start(proc, self->bus, self->addr, self->rate, self->timing_ms) != 0) {
+        fprintf(stderr, "ToF start failed\n"); free(proc); return;
+    }
+    self->tp = (long)(intptr_t)proc; // store pointer safely
+    self->last_val = 0.0;
+    if (self->verbose) {
+      printf("ToF[%d:%s] started on /dev/i2c-%d addr 0x%02X rate %dHz timing %dms\n",
+            self->id, self->label, self->bus, self->addr, self->rate, self->timing_ms);
+    }
+  =}
+
+  reaction(poll) -> value {=
+    tof_proc_t* proc = (tof_proc_t*)(uintptr_t)self->tp;
+    if (!proc) return;
+    double val = 0.0;
+    int r = tof_read_latest(proc, &val);
+    if (r == 0) {
+        self->last_val = val;
+        lf_set(value, val);
+        if (self->verbose) {
+          printf("ToF[%d:%s] value: %.3f\n", self->id, self->label, val);
+        }
+    }
+  =}
+
+  reaction(shutdown) {=
+    tof_proc_t* proc = (tof_proc_t*)(uintptr_t)self->tp;
+    if (proc) { tof_stop(proc); free(proc); self->tp = 0; }
+  =}
+}
+
+reactor TablePrinter(period: time=200 ms) {
+  timer beat(0, period)
+
+  input bottom: double
+  input front:  double
+  input right:  double
+  input left:   double
+  input top:    double
+
+  state b_val: double = -1.0
+  state f_val: double = -1.0
+  state r_val: double = -1.0
+  state l_val: double = -1.0
+  state t_val: double = -1.0
+
+  // Each of these reactions is triggered only when the input is present,
+  // so reading port->value is correct.
+  reaction(bottom) {=
+    self->b_val = bottom->value;
+  =}
+  reaction(front)  {=
+    self->f_val = front->value;
+  =}
+  reaction(right)  {=
+    self->r_val = right->value;
+  =}
+  reaction(left)   {=
+    self->l_val = left->value;
+  =}
+  reaction(top)    {=
+    self->t_val = top->value;
+  =}
+
+  reaction(beat) {=
+    char b[16], f[16], r[16], l[16], t[16];
+    if (self->b_val < 0) strcpy(b, "N/A"); else snprintf(b, sizeof(b), "%.3f", self->b_val);
+    if (self->f_val < 0) strcpy(f, "N/A"); else snprintf(f, sizeof(f), "%.3f", self->f_val);
+    if (self->r_val < 0) strcpy(r, "N/A"); else snprintf(r, sizeof(r), "%.3f", self->r_val);
+    if (self->l_val < 0) strcpy(l, "N/A"); else snprintf(l, sizeof(l), "%.3f", self->l_val);
+    if (self->t_val < 0) strcpy(t, "N/A"); else snprintf(t, sizeof(t), "%.3f", self->t_val);
+
+    // clear + home, then draw one table in place
+    printf("\033[2J\033[H");
+    printf("+---------+-----------+\n");
+    printf("| Sensor  | Value (m) |\n");
+    printf("+---------+-----------+\n");
+    printf("| bottom  | %9s |\n", b);
+    printf("| front   | %9s |\n", f);
+    printf("| right   | %9s |\n", r);
+    printf("| left    | %9s |\n", l);
+    printf("| top     | %9s |\n", t);
+    printf("+---------+-----------+\n");
+    fflush(stdout);
+  =}
+} 
+
+main reactor ToFBridgeC {
+  // set bus=1 if your HAT exposes /dev/i2c-1
+  bottom = new PyToF(id=0, label="bottom", bus=22, addr=41, rate=20, timing_ms=100, start_ms=100 ms, verbose=0)
+  front  = new PyToF(id=1, label="front", bus=24, addr=41, rate=20, timing_ms=100, start_ms=120 ms, verbose=0)
+  right  = new PyToF(id=2, label="right", bus=26, addr=41, rate=20, timing_ms=100, start_ms=140 ms, verbose=0)
+  left   = new PyToF(id=3, label="left", bus=23, addr=41, rate=20, timing_ms=100, start_ms=160 ms, verbose=0)
+  top    = new PyToF(id=4, label="top", bus=25, addr=41, rate=20, timing_ms=100, start_ms=180 ms, verbose=0)
+
+  table  = new TablePrinter(period=200 ms)
+
+  bottom.value -> table.bottom
+  front.value  -> table.front
+  right.value  -> table.right
+  left.value   -> table.left
+  top.value    -> table.top
+}

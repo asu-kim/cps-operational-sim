@@ -1,0 +1,165 @@
+target C { timeout: 10 s }
+
+preamble {=
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+#include <termios.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <time.h>
+
+#define MSP_SET_RAW_RC 200
+
+static uint8_t lf_cksum(uint8_t size, uint8_t cmd, const uint8_t* data) {
+    uint8_t cs = size ^ cmd;
+    for (int i = 0; i < size; i++) cs ^= data[i];
+    return cs;
+}
+
+static int lf_open_serial(const char* dev) {
+    int fd = open(dev, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0) return -1;
+    struct termios tio;
+    memset(&tio, 0, sizeof(tio));
+    cfmakeraw(&tio);
+    cfsetspeed(&tio, B115200);
+    tio.c_cflag |= CLOCAL | CREAD;
+    tio.c_cc[VMIN]  = 0;
+    tio.c_cc[VTIME] = 1; // 0.1 s
+    if (tcsetattr(fd, TCSANOW, &tio) != 0) { close(fd); return -1; }
+    return fd;
+}
+
+static int lf_send_rc(int fd, const uint16_t ch[16]) {
+    uint8_t payload[32];
+    for (int i = 0; i < 16; i++) {
+        uint16_t v = ch[i];
+        if (v < 1000) v = 1000;
+        if (v > 2000) v = 2000;
+        payload[2*i+0] = (uint8_t)(v & 0xFF);
+        payload[2*i+1] = (uint8_t)((v >> 8) & 0xFF);
+    }
+    uint8_t size = sizeof(payload);
+    uint8_t header[3] = {'$', 'M', '<'};
+    uint8_t cmd = MSP_SET_RAW_RC;
+    uint8_t cs = lf_cksum(size, cmd, payload);
+    if (write(fd, header, 3) != 3) return -1;
+    if (write(fd, &size, 1) != 1)  return -1;
+    if (write(fd, &cmd, 1) != 1)   return -1;
+    if (write(fd, payload, size) != size) return -1;
+    if (write(fd, &cs, 1) != 1)    return -1;
+    return 0;
+}
+=}
+
+main reactor DroneBridgeC {
+  timer tick(0, 10 ms)
+
+  state fd:int
+  state stage:int
+  state count:int
+
+  // RC channels
+  state rc0:int
+  state rc1:int
+  state rc2:int
+  state rc3:int
+  state rc4:int
+  state rc5:int
+  state rc6:int
+  state rc7:int
+  state rc8:int
+  state rc9:int
+  state rc10:int
+  state rc11:int
+  state rc12:int
+  state rc13:int
+  state rc14:int
+  state rc15:int
+
+  // throttle ramp parameters
+  state thr_start:int = 1200
+  state thr_end:int   = 1600   
+  state thr_step:int  = 5      // +5 per tick = ~50 per second at 100 Hz
+  state thr_hold_ticks:int = 200  // hold final throttle ~2 s
+
+  state pitch_cmd:int = 1560     // forward. try 1550..1600
+  state roll_trim:int  = 1500    // right is >1500 to cancel west drift. try 1510
+
+  reaction(startup) {=
+    const char* port = "/dev/ttyACM0";
+    self->fd = lf_open_serial(port);
+    if (self->fd < 0) {
+        printf("Failed to open %s\n", port);
+        return;
+    }
+    self->rc0 = 1500; self->rc1 = 1500; self->rc2 = 1500; self->rc3 = 1000;
+    self->rc4 = 1000; self->rc5 = 1000; self->rc6 = 1000; self->rc7 = 1000;
+    self->rc8 = 1000; self->rc9 = 1000; self->rc10 = 1000; self->rc11 = 1000;
+    self->rc12 = 1000; self->rc13 = 1000; self->rc14 = 1000; self->rc15 = 1000;
+
+    self->stage = 0;
+    self->count = 0;
+    printf("Opened %s\n", port);
+  =}
+
+  reaction(tick) {=
+    if (self->fd < 0) return;
+
+    uint16_t rc[16] = {
+      (uint16_t)self->rc0,(uint16_t)self->rc1,(uint16_t)self->rc2,(uint16_t)self->rc3,
+      (uint16_t)self->rc4,(uint16_t)self->rc5,(uint16_t)self->rc6,(uint16_t)self->rc7,
+      (uint16_t)self->rc8,(uint16_t)self->rc9,(uint16_t)self->rc10,(uint16_t)self->rc11,
+      (uint16_t)self->rc12,(uint16_t)self->rc13,(uint16_t)self->rc14,(uint16_t)self->rc15
+    };
+
+    switch (self->stage) {
+    case 0: // neutrals ~1.5 s
+      lf_send_rc(self->fd, rc);
+      if (++self->count >= 150) { self->count = 0; self->stage = 1; }
+      break;
+
+    case 1: // arm on AUX1 ~2 s
+      self->rc4 = 1800; rc[4] = (uint16_t)self->rc4;
+      lf_send_rc(self->fd, rc);
+      if (++self->count >= 200) { self->count = 0; self->stage = 2; }
+      break;
+
+    case 2: // throttle ramp up to thr_end
+      if (self->rc3 < self->thr_start) self->rc3 = self->thr_start;
+      else if (self->rc3 < self->thr_end) self->rc3 += self->thr_step;
+      if (self->rc3 > self->thr_end) self->rc3 = self->thr_end;
+      rc[3] = (uint16_t)self->rc3;
+      // neutral attitude while ramping
+      self->rc0 = 1500; self->rc1 = 1500;
+      rc[0] = (uint16_t)self->rc0; rc[1] = (uint16_t)self->rc1;
+      lf_send_rc(self->fd, rc);
+      if (self->rc3 >= self->thr_end) { self->count = 0; self->stage = 3; }
+      break;
+
+    case 3: // translate forward with optional right trim
+      self->rc1 = self->pitch_cmd;     // forward
+      self->rc0 = self->roll_trim;     // small right bias if you drift west
+      rc[1] = (uint16_t)self->rc1;
+      rc[0] = (uint16_t)self->rc0;
+      rc[3] = (uint16_t)self->rc3;     // keep throttle from ramp
+      lf_send_rc(self->fd, rc);
+      if (++self->count >= self->thr_hold_ticks) { self->count = 0; self->stage = 4; }
+      break;
+
+    case 4: // disarm
+      self->rc1 = 1500; self->rc0 = 1500;
+      self->rc3 = 1000; self->rc4 = 1000;
+      rc[1] = (uint16_t)self->rc1; rc[0] = (uint16_t)self->rc0;
+      rc[3] = (uint16_t)self->rc3; rc[4] = (uint16_t)self->rc4;
+      lf_send_rc(self->fd, rc);
+      if (++self->count >= 100) { self->count = 0; self->stage = 5; }
+      break;
+
+    default:
+      lf_send_rc(self->fd, rc);
+      break;
+    }
+  =}
+}

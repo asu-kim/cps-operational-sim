@@ -1,0 +1,8 @@
+# Lingua Franca generated/build directories
+bin/
+include/
+src-gen/
+.venv/
+**/bin/
+**/include/
+**/src-gen/

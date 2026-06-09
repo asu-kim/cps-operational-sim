@@ -1,0 +1,126 @@
+target C
+
+reactor AvoidPlanner {
+  // timer tick(0, 20 ms) // 50 Hz
+
+  input front:double; input left:double; input right:double; input bottom:double; input top:double
+  output roll:int; output pitch:int; output yaw:int; output throttle:int; output aux1:int; output aux2:int
+
+  state height_sp:double = 0.80
+  state thr_base:int = 1450
+  state thr_min:int = 1200
+  state thr_max:int = 1700
+
+  state k_h_p:double = 950.0
+  state k_h_i:double = 180.0
+  state i_h:double = 0.0
+  state i_h_min:double = -250.0
+  state i_h_max:double =  250.0
+
+  state ceil_min_clear:double = 0.35
+  state ceil_soft_band:double = 0.20
+
+  state front_thresh:double = 0.70
+  state side_target:double  = 0.50
+  state k_side:double = 250.0
+  state k_yaw:double  = 45.0
+  state pitch_fwd:int  = 1538
+  state pitch_slow:int = 1500
+
+  state stage:int = 0
+  state count:int = 0
+  state t_neutral:int = 75    // 1.5 s
+  state t_arm:int     = 100   // 2.0 s
+  state t_bump:int    = 75    // 1.5 s
+  state hover_ok:int  = 0
+
+  state initialized:bool = false
+
+  // state f:double=-1.0; state l:double=-1.0; state r:double=-1.0; state b:double=-1.0; state t:double=-1.0
+  // reaction(front){= self->f = front->value; =}
+  // reaction(left){=  self->l = left->value;  =}
+  // reaction(right){= self->r = right->value; =}
+  // reaction(bottom){=self->b = bottom->value;=}
+  // reaction(top){=   self->t = top->value;   =}
+
+  reaction(startup, front, left, right, bottom, top) -> roll, pitch, yaw, throttle, aux1, aux2 {=
+    if (!self->initialized){
+      self->initialized = true;
+      lf_set(roll,1500); lf_set(pitch,1500); lf_set(yaw,1500);
+      lf_set(throttle,1000); lf_set(aux1,1000);
+      lf_set(aux2,1800); // ANGLE ON
+      self->stage=0; self->count=0; self->i_h=0.0; self->hover_ok=0;
+      return;
+    }
+
+    int rc_roll=1500, rc_pitch=1500, rc_yaw=1500, rc_thr=1000;
+    int rc_aux1=1000, rc_aux2=1800;
+
+    // TODO(Pawan): Make this modal model.
+    // TODO(Pawan): Try using values from input ports directly instead of using state variables.
+    switch(self->stage){
+      case 0: rc_thr=1000; rc_aux1=1000; if(++self->count>=self->t_neutral){self->count=0; self->stage=1;} break;
+      case 1: rc_thr=1000; rc_aux1=1800; if(++self->count>=self->t_arm){self->count=0; self->stage=2;} break;
+      case 2: rc_thr=1200; rc_aux1=1800; if(++self->count>=self->t_bump){self->count=0; self->stage=3;} break;
+      case 3: {
+        rc_aux1=1800;
+        static int ramp=1300;
+        if (ramp < self->thr_base) ramp += 5;
+        rc_thr = ramp;
+        if (self->b>0 && self->b>0.35){ self->stage=4; self->count=0; }
+      } break;
+      default: {
+        rc_aux1=1800;
+        int thr_cmd = self->thr_base;
+        if (self->b>0){
+          double eh = self->height_sp - self->b;
+          double ui = self->i_h + eh*0.02*self->k_h_i;
+          if(ui<self->i_h_min) ui=self->i_h_min; if(ui>self->i_h_max) ui=self->i_h_max;
+          self->i_h = ui;
+          thr_cmd = self->thr_base + (int)(self->k_h_p*eh + ui);
+        }
+        if (self->t>0){
+          if (self->t < self->ceil_min_clear){
+            if (thr_cmd > 1250) thr_cmd = 1250;
+            rc_pitch = 1500; rc_yaw = 1500;
+          } else if (self->t < self->ceil_min_clear + self->ceil_soft_band){
+            double frac = (self->t - self->ceil_min_clear) / self->ceil_soft_band;
+            if (frac<0) frac=0; if (frac>1) frac=1;
+            int clamp = 1350 + (int)(250.0*frac);
+            if (thr_cmd > clamp) thr_cmd = clamp;
+          }
+        }
+        if (thr_cmd < self->thr_min) thr_cmd = self->thr_min;
+        if (thr_cmd > self->thr_max) thr_cmd = self->thr_max;
+        rc_thr = thr_cmd;
+
+        if (!self->hover_ok){
+          if (self->b>0 && self->b>0.6 && self->b<1.2){
+            if (++self->count >= 50) self->hover_ok = 1;
+          } else self->count = 0;
+        }
+
+        if (self->hover_ok){
+          rc_pitch = self->pitch_fwd;
+          if (self->f>0 && self->f < self->front_thresh){
+            rc_pitch = self->pitch_slow;
+            double e = self->front_thresh - self->f;
+            int yaw_cmd = 1500 + (int)(self->k_yaw * e);
+            if (yaw_cmd > 1700) yaw_cmd = 1700;
+            rc_yaw = yaw_cmd;
+          }
+          double roll_bias = 0.0;
+          if (self->l>0) roll_bias += (self->side_target - self->l);
+          if (self->r>0) roll_bias -= (self->side_target - self->r);
+          int roll_cmd = 1500 + (int)(self->k_side * roll_bias);
+          if (roll_cmd < 1400) roll_cmd = 1400;
+          if (roll_cmd > 1600) roll_cmd = 1600;
+          rc_roll = roll_cmd;
+        }
+      } break;
+    }
+
+    lf_set(roll,rc_roll); lf_set(pitch,rc_pitch); lf_set(yaw,rc_yaw);
+    lf_set(throttle,rc_thr); lf_set(aux1,rc_aux1); lf_set(aux2,rc_aux2);
+  =}
+}

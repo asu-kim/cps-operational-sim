@@ -1,0 +1,40 @@
+target C
+
+preamble {=
+  #include <termios.h>
+  #include <unistd.h>
+  #include <fcntl.h>
+  #include <stdio.h>
+
+  static struct termios _old_tio;
+  static void kb_setup(void){
+    struct termios tio;
+    tcgetattr(STDIN_FILENO, &_old_tio);
+    tio = _old_tio;
+    cfmakeraw(&tio);
+    tcsetattr(STDIN_FILENO, TCSANOW, &tio);
+    // non-blocking stdin
+    int fl = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, fl | O_NONBLOCK);
+    fprintf(stderr, "[UserLandCmd] Press 'l' or 'L' to land.\n");
+  }
+  static void kb_restore(void){ tcsetattr(STDIN_FILENO, TCSANOW, &_old_tio); }
+=}
+
+reactor UserLandCmd {
+  output out:int
+  timer poll(0, 50 ms)
+
+  reaction(startup) {= kb_setup(); =}
+  reaction(shutdown) {= kb_restore(); =}
+
+  reaction(poll) -> out {=
+    char c;
+    if (read(STDIN_FILENO, &c, 1) == 1) {
+      if (c=='l' || c=='L') {
+        lf_set(out, 1);       // emit once per keypress
+        fprintf(stderr, "[UserLandCmd] Land requested.\n");
+      }
+    }
+  =}
+}

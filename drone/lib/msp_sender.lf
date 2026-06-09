@@ -1,0 +1,193 @@
+target C
+
+preamble {=
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <termios.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <stdlib.h>
+
+#define MSP_SET_RAW_RC 200
+
+static void ensure_parent_dir(const char* path) {
+  char dir[512];
+  strncpy(dir, path, sizeof(dir) - 1);
+  dir[sizeof(dir) - 1] = '\0';
+
+  char* slash = strrchr(dir, '/');
+  if (!slash) return;
+
+  *slash = '\0';
+
+  char cmd[600];
+  snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\"", dir);
+  system(cmd);
+}
+
+static uint8_t cs(uint8_t size, uint8_t cmd, const uint8_t* data) {
+  uint8_t s = size ^ cmd;
+  for (int i = 0; i < size; i++) s ^= data[i];
+  return s;
+}
+
+static int open_serial(const char* dev) {
+  if (!dev || dev[0] == '\0') return -2;
+
+  int fd = open(dev, O_RDWR | O_NOCTTY | O_NONBLOCK);
+  if (fd < 0) return -1;
+
+  struct termios tio;
+  memset(&tio, 0, sizeof(tio));
+  cfmakeraw(&tio);
+  cfsetspeed(&tio, B115200);
+  tio.c_cflag |= CLOCAL | CREAD;
+  tio.c_cc[VMIN] = 0;
+  tio.c_cc[VTIME] = 1;
+
+  if (tcsetattr(fd, TCSANOW, &tio) != 0) {
+    close(fd);
+    return -1;
+  }
+  return fd;
+}
+
+static int send_rc(int fd, const uint16_t ch[16]) {
+  uint8_t payload[32];
+
+  for (int i = 0; i < 16; i++) {
+    uint16_t v = ch[i];
+    if (v < 1000) v = 1000;
+    if (v > 2000) v = 2000;
+    payload[2 * i]     = v & 0xFF;
+    payload[2 * i + 1] = (v >> 8) & 0xFF;
+  }
+
+  uint8_t header[3] = {'$', 'M', '<'};
+  uint8_t size = sizeof(payload);
+  uint8_t cmd  = MSP_SET_RAW_RC;
+  uint8_t csum = cs(size, cmd, payload);
+
+  if (write(fd, header, 3) != 3) return -1;
+  if (write(fd, &size, 1) != 1) return -1;
+  if (write(fd, &cmd, 1) != 1) return -1;
+  if (write(fd, payload, size) != size) return -1;
+  if (write(fd, &csum, 1) != 1) return -1;
+
+  return 0;
+}
+=}
+
+reactor MSPSender(
+  port:string="/dev/ttyACM0",
+  period:time=10 ms,
+  verbose:int=0,
+  print_every:int=1,
+  log_path:string=""
+) {
+  input roll:int
+  input pitch:int
+  input yaw:int
+  input throttle:int
+  input aux1:int
+  input aux2:int
+
+  timer tx(0, period)
+
+  state fd:int = -1
+  state fp: FILE*
+  state seq:int = 0
+
+  // Latched RC values
+  state rr:int  = 1500
+  state pp:int  = 1500
+  state yy:int  = 1500
+  state thr:int = 1000
+  state a1:int  = 1000
+  state a2:int  = 1000
+
+  reaction(startup) {=
+    self->fd = open_serial(self->port);
+    self->fp = NULL;
+    self->seq = 0;
+
+    if (self->fd >= 0) {
+      printf("[MSPSender] opened %s\n", self->port);
+    } else if (self->fd == -2) {
+      printf("[MSPSender] serial disabled; running in print/log-only mode.\n");
+    } else {
+      fprintf(stderr, "[MSPSender] FAILED to open %s\n", self->port);
+    }
+
+    if (self->log_path[0] != '\0') {
+      ensure_parent_dir(self->log_path);
+      self->fp = fopen(self->log_path, "w");
+      if (!self->fp) {
+        fprintf(stderr, "[MSPSender] Failed to open log file %s\n", self->log_path);
+      } else {
+        fprintf(self->fp, "step,roll,pitch,yaw,throttle,aux1,aux2\n");
+        fflush(self->fp);
+      }
+    }
+  =}
+
+  reaction(shutdown) {=
+    if (self->fp) {
+      fclose(self->fp);
+      self->fp = NULL;
+    }
+
+    if (self->fd >= 0) {
+      close(self->fd);
+      self->fd = -1;
+    }
+  =}
+
+  reaction(roll)     {= self->rr  = roll->value; =}
+  reaction(pitch)    {= self->pp  = pitch->value; =}
+  reaction(yaw)      {= self->yy  = yaw->value; =}
+  reaction(throttle) {= self->thr = throttle->value; =}
+  reaction(aux1)     {= self->a1  = aux1->value; =}
+  reaction(aux2)     {= self->a2  = aux2->value; =}
+
+  reaction(tx) {=
+    uint16_t rc[16] = {
+      1500,1500,1500,1000,1000,1000,1000,1000,
+      1000,1000,1000,1000,1000,1000,1000,1000
+    };
+
+    rc[0] = (uint16_t)self->rr;
+    rc[1] = (uint16_t)self->pp;
+    rc[2] = (uint16_t)self->yy;
+    rc[3] = (uint16_t)self->thr;
+    rc[4] = (uint16_t)self->a1;
+    rc[5] = (uint16_t)self->a2;
+
+    self->seq += 1;
+
+    if (self->fd >= 0) {
+      if (send_rc(self->fd, rc) != 0) {
+        fprintf(stderr, "[MSPSender] send_rc failed. Closing serial.\n");
+        close(self->fd);
+        self->fd = -1;
+      }
+    }
+
+    if (self->fp) {
+      fprintf(self->fp, "%d,%d,%d,%d,%d,%d,%d\n",
+              self->seq,
+              self->rr, self->pp, self->yy, self->thr, self->a1, self->a2);
+      fflush(self->fp);
+    }
+
+    if (self->verbose && self->print_every > 0 &&
+        (self->seq % self->print_every) == 0) {
+      printf("[MSPSender] step=%d roll=%d pitch=%d yaw=%d throttle=%d aux1=%d aux2=%d%s\n",
+             self->seq,
+             self->rr, self->pp, self->yy, self->thr, self->a1, self->a2,
+             (self->fd >= 0) ? "" : " [serial not active]");
+      fflush(stdout);
+    }
+  =}
+}

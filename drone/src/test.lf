@@ -1,0 +1,39 @@
+target C   // runs until Ctrl+C
+
+import PyToF from "/mnt/e/PhD/lf-demos/lf-drone/lib/ToFBridgeC.lf"
+import AvoidPlanner from "/mnt/e/PhD/lf-demos/lf-drone/lib/avoid_planner_modal.lf"
+import MSPSender from "/mnt/e/PhD/lf-demos/lf-drone/lib/msp_sender.lf"
+import UserLandCmd from "/mnt/e/PhD/lf-demos/lf-drone/lib/UserLandCmd.lf"
+
+main reactor test {
+  // ToF sensors (use the exact buses/addresses that work for you)
+  bottom = new PyToF(bus=22, addr=41, rate=20, timing_ms=100)
+  front  = new PyToF(bus=24, addr=41, rate=20, timing_ms=100)
+  right  = new PyToF(bus=26, addr=41, rate=20, timing_ms=100)
+  left   = new PyToF(bus=23, addr=41, rate=20, timing_ms=100)
+  top    = new PyToF(bus=25, addr=41, rate=20, timing_ms=100)
+
+  avoid  = new AvoidPlanner()
+  msp    = new MSPSender(port="/dev/ttyACM0")
+
+  // Keyboard landing trigger
+  land_cmd = new UserLandCmd()
+
+  // sensors -> planner
+  front.value  -> avoid.front
+  left.value   -> avoid.left
+  right.value  -> avoid.right
+  bottom.value -> avoid.bottom
+  top.value    -> avoid.top
+
+  // landing command
+  land_cmd.out -> avoid.land
+
+  // planner -> MSP
+  avoid.roll     -> msp.roll
+  avoid.pitch    -> msp.pitch
+  avoid.yaw      -> msp.yaw
+  avoid.throttle -> msp.throttle
+  avoid.aux1     -> msp.aux1
+  avoid.aux2     -> msp.aux2
+}

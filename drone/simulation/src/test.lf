@@ -1,0 +1,41 @@
+target C   // runs until Ctrl+C
+
+import PyToF from "ToFBridgeCSV.lf"
+import AvoidPlanner from "/mnt/e/PhD/lf-demos/lf-drone/lib/avoid_planner_modal.lf"
+import MSPSender from "/mnt/e/PhD/lf-demos/lf-drone/lib/msp_sender.lf"
+import UserLandCmd from "/mnt/e/PhD/lf-demos/lf-drone/lib/UserLandCmd.lf"
+
+main reactor test {
+  bottom = new PyToF(id=0, label="bottom", path="simulation/data/Data4/bottom.csv", start_ms=20 ms, period=20 ms, verbose=1)
+  front  = new PyToF(id=1, label="front",  path="simulation/data/Data4/front.csv",  start_ms=20 ms, period=20 ms, verbose=1)
+  right  = new PyToF(id=2, label="right",  path="simulation/data/Data4/right.csv",  start_ms=20 ms, period=20 ms, verbose=1)
+  left   = new PyToF(id=3, label="left",   path="simulation/data/Data4/left.csv",   start_ms=20 ms, period=20 ms, verbose=1)
+  top    = new PyToF(id=4, label="top",    path="simulation/data/Data4/top.csv",    start_ms=20 ms, period=20 ms, verbose=1)
+
+  avoid = new AvoidPlanner()
+
+  msp = new MSPSender(
+    port="",
+    period=20 ms,
+    verbose=1,
+    print_every=1,
+    log_path="simulation/results/rc-out-4.csv"
+  )
+
+  land_cmd = new UserLandCmd()
+
+  front.value  -> avoid.front
+  left.value   -> avoid.left
+  right.value  -> avoid.right
+  bottom.value -> avoid.bottom
+  top.value    -> avoid.top
+
+  land_cmd.out -> avoid.land
+
+  avoid.roll     -> msp.roll
+  avoid.pitch    -> msp.pitch
+  avoid.yaw      -> msp.yaw
+  avoid.throttle -> msp.throttle
+  avoid.aux1     -> msp.aux1
+  avoid.aux2     -> msp.aux2
+}

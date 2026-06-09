@@ -1,0 +1,231 @@
+target C {
+  platform: {
+    name: "rp2040",
+    board: "pololu_3pi_2040_robot"
+  },
+  single-threaded: true
+}
+
+import Display from "lib/Display.lf"
+import Motors from "lib/Motors.lf"
+import Line from "lib/Line.lf"
+
+preamble {=
+  #include <stdio.h>
+  #include <stdint.h>
+  #include <pico/time.h>
+=}
+
+reactor Robot(calibration_time: time = 10 s, sample_period: time = 50 ms) {
+  output display0: string
+  output display1: string
+  output display2: string
+  output display3: string
+
+  timer trigger(0, sample_period)
+  timer seconds(0, 1 s)
+  timer end_calibration(calibration_time)
+
+  logical action turning
+
+  state elapsed_seconds: int = 0
+  state lost_count: int = 0
+  state prev_state: int = 2
+  state sample_index: uint32_t = 0
+
+  motors = new Motors()
+  line = new Line()
+
+  reaction(startup) -> display0, display1, display2 {=
+    lf_set(display0, "CALIBRATING");
+    lf_set(display1, "Roll robot over");
+    lf_set(display2, "light and dark.");
+
+    printf("time_us,sample,mode,s0,s1,s2,s3,s4,current_state,prev_state,lost_count,left_cmd_milli,right_cmd_milli\n");
+    fflush(stdout);
+  =}
+
+  reaction(seconds) -> display3 {=
+    static char buf[17];
+    snprintf(buf, 17, "time:%8d s", self->elapsed_seconds++);
+    lf_set(display3, buf);
+  =}
+
+  reaction(end_calibration) -> line.calibrate, display0, display1, display2 {=
+    lf_set(line.calibrate, false);
+
+    lf_set(display0, "LOGGING");
+    lf_set(display1, "USB CSV");
+    lf_set(display2, "Run track");
+
+    printf("time_us,sample,mode,s0,s1,s2,s3,s4,current_state,prev_state,lost_count,left_cmd_milli,right_cmd_milli\n");
+    fflush(stdout);
+  =}
+
+  reaction(trigger) -> line.trigger {=
+    lf_set(line.trigger, true);
+  =}
+
+  initial mode DRIVING {
+    reaction(line.reflect) -> reset(STOP), motors.left_power, motors.right_power, display0, display1, display2 {=
+      int current_state = -1;
+      int left_cmd_milli = 0;
+      int right_cmd_milli = 0;
+      int reset_lost_count = 1;
+
+      if (
+        line.reflect->value[1] > 500 &&
+        line.reflect->value[2] > 500 &&
+        line.reflect->value[3] > 500
+      ) {
+        // The robot is well following the lane.
+        current_state = 2;
+        left_cmd_milli = 100;
+        right_cmd_milli = 100;
+        lf_set(motors.left_power, 0.1f);
+        lf_set(motors.right_power, 0.1f);
+
+      } else if (line.reflect->value[1] > 500) {
+        // The sensor on the left is on the lane.
+        current_state = 1;
+        left_cmd_milli = -100;
+        right_cmd_milli = 100;
+        lf_set(motors.left_power, -0.1f);
+        lf_set(motors.right_power, 0.1f);
+
+      } else if (line.reflect->value[3] > 500) {
+        // The sensor on the right is on the lane.
+        current_state = 3;
+        left_cmd_milli = 100;
+        right_cmd_milli = -100;
+        lf_set(motors.left_power, 0.1f);
+        lf_set(motors.right_power, -0.1f);
+
+      } else if (
+        line.reflect->value[1] <= 500 &&
+        line.reflect->value[2] <= 500 &&
+        line.reflect->value[3] <= 500
+      ) {
+        // Every center sensor is not on the lane.
+        if (line.reflect->value[0] > 500) {
+          // The leftmost sensor is on the lane.
+          current_state = 0;
+          left_cmd_milli = -100;
+          right_cmd_milli = 100;
+          lf_set(motors.left_power, -0.1f);
+          lf_set(motors.right_power, 0.1f);
+
+        } else if (line.reflect->value[4] > 500) {
+          // The rightmost sensor is on the lane.
+          current_state = 4;
+          left_cmd_milli = 100;
+          right_cmd_milli = -100;
+          lf_set(motors.left_power, 0.1f);
+          lf_set(motors.right_power, -0.1f);
+
+        } else {
+          // No sensor is on the lane.
+          self->lost_count++;
+          reset_lost_count = 0;
+
+          if (self->lost_count >= 3) {
+            current_state = self->prev_state;
+            left_cmd_milli = 0;
+            right_cmd_milli = 0;
+            lf_set(motors.left_power, 0.0f);
+            lf_set(motors.right_power, 0.0f);
+            lf_set_mode(STOP);
+
+          } else {
+            current_state = self->prev_state;
+
+            if (self->prev_state < 2) {
+              left_cmd_milli = -100;
+              right_cmd_milli = 100;
+              lf_set(motors.left_power, -0.1f);
+              lf_set(motors.right_power, 0.1f);
+
+            } else if (self->prev_state > 2) {
+              left_cmd_milli = -100;
+              right_cmd_milli = 100;
+              lf_set(motors.left_power, -0.1f);
+              lf_set(motors.right_power, 0.1f);
+
+            } else {
+              left_cmd_milli = 100;
+              right_cmd_milli = 100;
+              lf_set(motors.left_power, 0.1f);
+              lf_set(motors.right_power, 0.1f);
+            }
+          }
+        }
+      }
+
+      printf(
+        "%llu,%lu,DRIVING,%u,%u,%u,%u,%u,%d,%d,%d,%d,%d\n",
+        (unsigned long long) time_us_64(),
+        (unsigned long) self->sample_index++,
+        line.reflect->value[0],
+        line.reflect->value[1],
+        line.reflect->value[2],
+        line.reflect->value[3],
+        line.reflect->value[4],
+        current_state,
+        self->prev_state,
+        self->lost_count,
+        left_cmd_milli,
+        right_cmd_milli
+      );
+      fflush(stdout);
+
+      self->prev_state = current_state;
+
+      if (reset_lost_count == 1) {
+        self->lost_count = 0;
+      }
+
+      static char buf0[17];
+      snprintf(buf0, 17, "state:%9d", current_state);
+      lf_set(display0, buf0);
+      lf_set(display1, "logging USB");
+      lf_set(display2, "");
+    =}
+  }
+
+  mode STOP {
+    reaction(line.reflect) -> display0, display1, display2, motors.left_power, motors.right_power {=
+      lf_set(display0, "Stop.");
+      lf_set(display1, "Log done");
+      lf_set(display2, "");
+
+      lf_set(motors.left_power, 0.0f);
+      lf_set(motors.right_power, 0.0f);
+
+      printf(
+        "%llu,%lu,STOP,%u,%u,%u,%u,%u,%d,%d,%d,%d,%d\n",
+        (unsigned long long) time_us_64(),
+        (unsigned long) self->sample_index++,
+        line.reflect->value[0],
+        line.reflect->value[1],
+        line.reflect->value[2],
+        line.reflect->value[3],
+        line.reflect->value[4],
+        -1,
+        self->prev_state,
+        self->lost_count,
+        0,
+        0
+      );
+      fflush(stdout);
+
+      lf_request_stop();
+    =}
+  }
+}
+
+main reactor {
+  robot = new Robot()
+
+  display = new Display()
+  robot.display0, robot.display1, robot.display2, robot.display3 -> display.line0, display.line1, display.line2, display.line3
+}

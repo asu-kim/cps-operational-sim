@@ -1,0 +1,96 @@
+/**
+ * Adjustable bump sensor reactor for Pololu 3Pi+ 2040.
+ *
+ * Lower press_percent / release_percent = more sensitive.
+ * Higher press_percent / release_percent = less sensitive.
+ *
+ * Default Pololu behavior is approximately:
+ *   release threshold = 140%
+ *   press threshold   = 160%
+ *
+ * This version lets the maze experiment use a more sensitive setting.
+ */
+target C {
+  platform: {
+    name: "rp2040",
+    board: "pololu_3pi_2040_robot"
+  },
+  single-threaded: true
+}
+
+preamble {=
+  #include <stdint.h>
+  #include <stdbool.h>
+  #include <ir_sensors.h>
+
+  extern uint16_t bump_sensors[2];
+  extern uint16_t bump_sensors_threshold_min[2];
+  extern uint16_t bump_sensors_threshold_max[2];
+
+  static void adjustable_bump_calibrate(
+    int sample_count,
+    int release_percent,
+    int press_percent
+  ) {
+    if (sample_count < 1) {
+      sample_count = 1;
+    }
+
+    if (release_percent < 100) {
+      release_percent = 100;
+    }
+
+    if (press_percent <= release_percent) {
+      press_percent = release_percent + 5;
+    }
+
+    uint32_t sum[2] = {0, 0};
+
+    for (int i = 0; i < sample_count; i++) {
+      bump_sensors_read();
+      sum[0] += bump_sensors[0];
+      sum[1] += bump_sensors[1];
+    }
+
+    for (int i = 0; i < 2; i++) {
+      uint32_t avg = sum[i] / sample_count;
+
+      bump_sensors_threshold_min[i] = (uint16_t)((avg * release_percent) / 100);
+      bump_sensors_threshold_max[i] = (uint16_t)((avg * press_percent) / 100);
+    }
+  }
+=}
+
+reactor BumpAdjustable(
+  sample_period: time = 20 ms,
+  calibrate_samples: int = 80,
+  release_percent: int = 115,
+  press_percent: int = 125
+) {
+  timer t(0, sample_period)
+
+  input calibrate: bool
+
+  output left: bool
+  output right: bool
+
+  reaction(startup, calibrate) {=
+    adjustable_bump_calibrate(
+      self->calibrate_samples,
+      self->release_percent,
+      self->press_percent
+    );
+  =}
+
+  reaction(t) -> left, right {=
+    bump_sensors_read();
+
+    if (bump_sensor_left_is_pressed()) {
+      lf_set(left, true);
+    }
+
+    if (bump_sensor_right_is_pressed()) {
+      lf_set(right, true);
+    }
+  =}
+}

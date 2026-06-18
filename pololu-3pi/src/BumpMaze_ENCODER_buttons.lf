@@ -1,0 +1,673 @@
+target C {
+  platform: {
+    name: "rp2040",
+    board: "pololu_3pi_2040_robot"
+  },
+  single-threaded: true
+}
+
+import Display from "lib/Display.lf"
+import Motors from "lib/Motors.lf"
+import Encoders from "lib/Encoders.lf"
+import BumpAdjustable from "lib/BumpAdjustable.lf"
+import GyroAngle from "lib/IMU.lf"
+
+preamble {=
+  #include <stdio.h>
+  #include <stdint.h>
+  #include <math.h>
+  #include <pico/time.h>
+  #include <pico/stdlib.h>
+  #include <hardware/gpio.h>
+
+  #define WHEEL_DIAMETER_M 0.03175f
+  #define WHEEL_BASE_M 0.095f
+  #define PI_F 3.14159265358979323846f
+  #define ENCODER_DEG_TO_M ((PI_F * WHEEL_DIAMETER_M) / 360.0f)
+
+  #define FORWARD_BASE_MILLI 120
+  #define BACKUP_MILLI 100
+  #define TURN_MILLI 80
+
+  #define BACKUP_DISTANCE_M 0.020f
+  #define MAX_BACKUP_TIME_US 1200000ULL
+  #define MAX_TURN_TIME_US 3000000ULL
+
+  #define SINGLE_BUMP_TURN_DEG 45.0f
+  #define BOTH_BUMP_TURN_DEG 90.0f
+  #define IMMEDIATE_BUMP_TURN_DEG 180.0f
+  #define IMMEDIATE_BUMP_AFTER_TURN_DISTANCE_M 0.08f
+
+  #define SIDE_STALL_SMALL_DELTA_DEG 2
+  #define SIDE_STALL_OTHER_DELTA_DEG 6
+  #define SIDE_STALL_COUNT_LIMIT 3
+
+  #define DRIVE_WAITING 0
+  #define DRIVE_FORWARD 1
+  #define DRIVE_BACKUP 2
+  #define DRIVE_TURN_LEFT 3
+  #define DRIVE_TURN_RIGHT 4
+  #define DRIVE_STOPPED 5
+
+  static const char* drive_mode_name(int drive_mode) {
+    switch (drive_mode) {
+      case DRIVE_WAITING: return "WAITING";
+      case DRIVE_FORWARD: return "FORWARD";
+      case DRIVE_BACKUP: return "BACKUP";
+      case DRIVE_TURN_LEFT: return "TURN_LEFT";
+      case DRIVE_TURN_RIGHT: return "TURN_RIGHT";
+      case DRIVE_STOPPED: return "STOPPED";
+      default: return "UNKNOWN";
+    }
+  }
+
+  static float abs_float(float x) {
+    return x < 0.0f ? -x : x;
+  }
+
+  #define LOG_CAPACITY 2500
+
+  typedef struct {
+    uint64_t robot_time_us;
+    uint64_t robot_elapsed_us;
+    uint32_t sample;
+    int drive_mode;
+    int bump_left;
+    int bump_right;
+    int32_t left_encoder_deg;
+    int32_t right_encoder_deg;
+    int32_t delta_left_encoder_deg;
+    int32_t delta_right_encoder_deg;
+    float left_distance_m;
+    float right_distance_m;
+    float x_m;
+    float y_m;
+    float theta_deg;
+    float gyro_z_deg;
+    float turn_target_deg;
+    int left_cmd_milli;
+    int right_cmd_milli;
+  } log_row_t;
+
+  static log_row_t log_buffer[LOG_CAPACITY];
+
+  static void dump_log_buffer(int count) {
+    printf("robot_time_us,robot_elapsed_us,sample,mode,bump_left,bump_right,left_encoder_deg,right_encoder_deg,delta_left_encoder_deg,delta_right_encoder_deg,left_distance_m,right_distance_m,x_m,y_m,theta_deg,gyro_z_deg,turn_target_deg,left_cmd_milli,right_cmd_milli\n");
+
+    for (int i = 0; i < count; i++) {
+      printf(
+        "%llu,%llu,%lu,%s,%d,%d,%ld,%ld,%ld,%ld,%.5f,%.5f,%.5f,%.5f,%.3f,%.3f,%.3f,%d,%d\n",
+        (unsigned long long) log_buffer[i].robot_time_us,
+        (unsigned long long) log_buffer[i].robot_elapsed_us,
+        (unsigned long) log_buffer[i].sample,
+        drive_mode_name(log_buffer[i].drive_mode),
+        log_buffer[i].bump_left,
+        log_buffer[i].bump_right,
+        (long) log_buffer[i].left_encoder_deg,
+        (long) log_buffer[i].right_encoder_deg,
+        (long) log_buffer[i].delta_left_encoder_deg,
+        (long) log_buffer[i].delta_right_encoder_deg,
+        log_buffer[i].left_distance_m,
+        log_buffer[i].right_distance_m,
+        log_buffer[i].x_m,
+        log_buffer[i].y_m,
+        log_buffer[i].theta_deg,
+        log_buffer[i].gyro_z_deg,
+        log_buffer[i].turn_target_deg,
+        log_buffer[i].left_cmd_milli,
+        log_buffer[i].right_cmd_milli
+      );
+    }
+
+    fflush(stdout);
+  }
+
+  #define BUTTON_A_PIN 25
+  #define BUTTON_C_PIN 0
+  #define BUTTON_DEBOUNCE_US 50000U
+
+  static int button_a_last = 0;
+  static int button_c_last = 0;
+  static uint32_t button_a_last_time_us = 0;
+  static uint32_t button_c_last_time_us = 0;
+
+  static int button_a_raw_pressed(void) {
+    gpio_init(BUTTON_A_PIN);
+    gpio_set_dir(BUTTON_A_PIN, GPIO_IN);
+    gpio_pull_up(BUTTON_A_PIN);
+    return gpio_get(BUTTON_A_PIN) == 0;
+  }
+
+  static int button_c_raw_pressed(void) {
+    gpio_set_oeover(BUTTON_C_PIN, GPIO_OVERRIDE_LOW);
+    gpio_pull_up(BUTTON_C_PIN);
+    sleep_us(1);
+    int pressed = gpio_get(BUTTON_C_PIN) == 0;
+    gpio_set_oeover(BUTTON_C_PIN, GPIO_OVERRIDE_NORMAL);
+    return pressed;
+  }
+
+  static int button_a_pressed_edge(void) {
+    int pressed = button_a_raw_pressed();
+    uint32_t now = time_us_32();
+
+    if (pressed != button_a_last &&
+        (uint32_t)(now - button_a_last_time_us) > BUTTON_DEBOUNCE_US) {
+      button_a_last = pressed;
+      button_a_last_time_us = now;
+
+      if (pressed) {
+        return 1;
+      }
+    }
+
+    return 0;
+  }
+
+  static int button_c_pressed_edge(void) {
+    int pressed = button_c_raw_pressed();
+    uint32_t now = time_us_32();
+
+    if (pressed != button_c_last &&
+        (uint32_t)(now - button_c_last_time_us) > BUTTON_DEBOUNCE_US) {
+      button_c_last = pressed;
+      button_c_last_time_us = now;
+
+      if (pressed) {
+        return 1;
+      }
+    }
+
+    return 0;
+  }
+
+=}
+
+reactor Robot(
+  sample_period: time = 50 ms
+) {
+  output display0: string
+  output display1: string
+  output display2: string
+  output display3: string
+
+  timer tick(0, sample_period)
+  timer seconds(0, 1 s)
+
+  state elapsed_seconds: int = 0
+  state sample_index: uint32_t = 0
+  state log_count: int = 0
+  state log_overflow: int = 0
+
+  state run_enabled: int = 0
+  state drive_mode: int = 0
+  state mode_until_us: uint64_t = 0
+  state pending_turn_mode: int = 4
+
+  state bump_left_pending: int = 0
+  state bump_right_pending: int = 0
+
+  state left_side_stall_count: int = 0
+  state right_side_stall_count: int = 0
+
+  state left_cmd_milli: int = 0
+  state right_cmd_milli: int = 0
+
+  state log_start_time_us: uint64_t = 0
+
+  state encoder_baseline_set: int = 0
+  state prev_left_encoder_deg: int32_t = 0
+  state prev_right_encoder_deg: int32_t = 0
+
+  state left_encoder_deg: int32_t = 0
+  state right_encoder_deg: int32_t = 0
+  state delta_left_encoder_deg: int32_t = 0
+  state delta_right_encoder_deg: int32_t = 0
+
+  state left_distance_m: float = 0.0
+  state right_distance_m: float = 0.0
+
+  state x_m: float = 0.0
+  state y_m: float = 0.0
+  state theta_rad: float = 0.0
+
+  state backup_start_left_distance_m: float = 0.0
+  state backup_start_right_distance_m: float = 0.0
+
+  state gyro_z_deg: float = 0.0
+  state turn_start_gyro_z_deg: float = 0.0
+  state turn_target_deg: float = 45.0
+
+  state have_last_turn: int = 0
+  state last_turn_x_m: float = 0.0
+  state last_turn_y_m: float = 0.0
+  state both_bump_turn_toggle: int = 0
+
+  motors = new Motors()
+  encoder = new Encoders()
+  bump = new BumpAdjustable(sample_period = 20 ms, calibrate_samples = 80, release_percent = 110, press_percent = 118)
+  gyro = new GyroAngle()
+
+  reaction(startup) -> display0, display1, display2, motors.left_power, motors.right_power {=
+    self->elapsed_seconds = 0;
+    self->sample_index = 0;
+    self->log_count = 0;
+    self->log_overflow = 0;
+
+    self->run_enabled = 0;
+    self->drive_mode = DRIVE_WAITING;
+    self->mode_until_us = 0;
+    self->pending_turn_mode = DRIVE_TURN_RIGHT;
+
+    self->bump_left_pending = 0;
+    self->bump_right_pending = 0;
+
+    self->left_side_stall_count = 0;
+    self->right_side_stall_count = 0;
+
+    self->left_cmd_milli = 0;
+    self->right_cmd_milli = 0;
+
+    self->log_start_time_us = time_us_64();
+
+    self->encoder_baseline_set = 0;
+    self->prev_left_encoder_deg = 0;
+    self->prev_right_encoder_deg = 0;
+    self->left_encoder_deg = 0;
+    self->right_encoder_deg = 0;
+    self->delta_left_encoder_deg = 0;
+    self->delta_right_encoder_deg = 0;
+
+    self->left_distance_m = 0.0f;
+    self->right_distance_m = 0.0f;
+    self->x_m = 0.0f;
+    self->y_m = 0.0f;
+    self->theta_rad = 0.0f;
+
+    self->backup_start_left_distance_m = 0.0f;
+    self->backup_start_right_distance_m = 0.0f;
+
+    self->gyro_z_deg = 0.0f;
+    self->turn_start_gyro_z_deg = 0.0f;
+    self->turn_target_deg = SINGLE_BUMP_TURN_DEG;
+
+    self->have_last_turn = 0;
+    self->last_turn_x_m = 0.0f;
+    self->last_turn_y_m = 0.0f;
+    self->both_bump_turn_toggle = 0;
+
+    lf_set(motors.left_power, 0.0f);
+    lf_set(motors.right_power, 0.0f);
+
+    lf_set(display0, "READY");
+    lf_set(display1, "A=start C=stop");
+    lf_set(display2, "A=start");
+
+    fflush(stdout);
+  =}
+
+  reaction(seconds) -> display3 {=
+    static char buf[17];
+
+    if (self->run_enabled) {
+      snprintf(buf, 17, "run:%9d s", self->elapsed_seconds++);
+    } else {
+      snprintf(buf, 17, "waiting");
+    }
+
+    lf_set(display3, buf);
+  =}
+
+  reaction(bump.left) {=
+    if (self->run_enabled) {
+      self->bump_left_pending = 1;
+    }
+  =}
+
+  reaction(bump.right) {=
+    if (self->run_enabled) {
+      self->bump_right_pending = 1;
+    }
+  =}
+
+  reaction(tick) -> encoder.trigger, gyro.trigger {=
+    int start_pressed = button_a_pressed_edge();
+    int recalibrate_pressed = 0;
+    int stop_pressed = button_c_pressed_edge();
+
+    if (recalibrate_pressed && !self->run_enabled) {
+      /* B button is reserved. Dynamic bump recalibration was removed here
+       * to avoid an LF causality loop through bump.calibrate.
+       */
+    }
+
+    if (start_pressed && !self->run_enabled) {
+      if (self->drive_mode == DRIVE_STOPPED) {
+        dump_log_buffer(self->log_count);
+      } else {
+        self->elapsed_seconds = 0;
+        self->sample_index = 0;
+        self->log_count = 0;
+        self->log_overflow = 0;
+
+        self->run_enabled = 1;
+        self->drive_mode = DRIVE_FORWARD;
+        self->mode_until_us = 0;
+        self->pending_turn_mode = DRIVE_TURN_RIGHT;
+
+        self->bump_left_pending = 0;
+        self->bump_right_pending = 0;
+
+        self->left_side_stall_count = 0;
+        self->right_side_stall_count = 0;
+
+        self->left_cmd_milli = 0;
+        self->right_cmd_milli = 0;
+
+        self->log_start_time_us = time_us_64();
+
+        self->encoder_baseline_set = 0;
+        self->prev_left_encoder_deg = 0;
+        self->prev_right_encoder_deg = 0;
+        self->delta_left_encoder_deg = 0;
+        self->delta_right_encoder_deg = 0;
+
+        self->left_distance_m = 0.0f;
+        self->right_distance_m = 0.0f;
+        self->x_m = 0.0f;
+        self->y_m = 0.0f;
+        self->theta_rad = 0.0f;
+
+        self->backup_start_left_distance_m = 0.0f;
+        self->backup_start_right_distance_m = 0.0f;
+
+        self->turn_start_gyro_z_deg = self->gyro_z_deg;
+        self->turn_target_deg = SINGLE_BUMP_TURN_DEG;
+
+        self->have_last_turn = 0;
+        self->last_turn_x_m = 0.0f;
+        self->last_turn_y_m = 0.0f;
+        self->both_bump_turn_toggle = 0;
+      }
+    }
+
+    if (stop_pressed && self->run_enabled) {
+      self->run_enabled = 0;
+      self->drive_mode = DRIVE_STOPPED;
+      self->left_cmd_milli = 0;
+      self->right_cmd_milli = 0;
+
+      fflush(stdout);
+    }
+
+    lf_set(encoder.trigger, true);
+    lf_set(gyro.trigger, true);
+  =}
+
+  reaction(gyro.z) {=
+    self->gyro_z_deg = gyro.z->value;
+  =}
+
+  reaction(encoder.left, encoder.right) -> motors.left_power, motors.right_power, display0, display1, display2 {=
+    uint64_t now_us = time_us_64();
+    uint64_t elapsed_us = now_us - self->log_start_time_us;
+
+    self->left_encoder_deg = encoder.left->value;
+    self->right_encoder_deg = encoder.right->value;
+
+    if (!self->encoder_baseline_set) {
+      self->prev_left_encoder_deg = self->left_encoder_deg;
+      self->prev_right_encoder_deg = self->right_encoder_deg;
+      self->delta_left_encoder_deg = 0;
+      self->delta_right_encoder_deg = 0;
+      self->encoder_baseline_set = 1;
+    } else {
+      self->delta_left_encoder_deg = self->left_encoder_deg - self->prev_left_encoder_deg;
+      self->delta_right_encoder_deg = self->right_encoder_deg - self->prev_right_encoder_deg;
+
+      self->prev_left_encoder_deg = self->left_encoder_deg;
+      self->prev_right_encoder_deg = self->right_encoder_deg;
+
+      float dl = ((float) self->delta_left_encoder_deg) * ENCODER_DEG_TO_M;
+      float dr = ((float) self->delta_right_encoder_deg) * ENCODER_DEG_TO_M;
+
+      self->left_distance_m += dl;
+      self->right_distance_m += dr;
+
+      float ds = 0.5f * (dl + dr);
+      float dtheta = (dr - dl) / WHEEL_BASE_M;
+
+      self->theta_rad += dtheta;
+      self->x_m += ds * cosf(self->theta_rad);
+      self->y_m += ds * sinf(self->theta_rad);
+    }
+
+    if (!self->run_enabled) {
+      self->left_cmd_milli = 0;
+      self->right_cmd_milli = 0;
+
+      lf_set(motors.left_power, 0.0f);
+      lf_set(motors.right_power, 0.0f);
+
+      if (self->drive_mode == DRIVE_STOPPED) {
+        lf_set(display0, "STOPPED");
+        static char stop_buf[17];
+        snprintf(stop_buf, 17, "rows:%9d", self->log_count);
+        lf_set(display1, stop_buf);
+        lf_set(display2, "A=dump USB");
+      } else {
+        self->drive_mode = DRIVE_WAITING;
+        lf_set(display0, "READY");
+        lf_set(display1, "A=start C=stop");
+        lf_set(display2, "A=start");
+      }
+
+      return;
+    }
+
+    int bump_left = self->bump_left_pending;
+    int bump_right = self->bump_right_pending;
+    int bump_any = bump_left || bump_right;
+
+    int side_contact_left = 0;
+    int side_contact_right = 0;
+
+    int abs_delta_left = self->delta_left_encoder_deg;
+    int abs_delta_right = self->delta_right_encoder_deg;
+
+    if (abs_delta_left < 0) {
+      abs_delta_left = -abs_delta_left;
+    }
+
+    if (abs_delta_right < 0) {
+      abs_delta_right = -abs_delta_right;
+    }
+
+    if (self->drive_mode == DRIVE_FORWARD) {
+      if (abs_delta_left <= SIDE_STALL_SMALL_DELTA_DEG &&
+          abs_delta_right >= SIDE_STALL_OTHER_DELTA_DEG) {
+        self->left_side_stall_count++;
+      } else {
+        self->left_side_stall_count = 0;
+      }
+
+      if (abs_delta_right <= SIDE_STALL_SMALL_DELTA_DEG &&
+          abs_delta_left >= SIDE_STALL_OTHER_DELTA_DEG) {
+        self->right_side_stall_count++;
+      } else {
+        self->right_side_stall_count = 0;
+      }
+
+      if (self->left_side_stall_count >= SIDE_STALL_COUNT_LIMIT) {
+        side_contact_left = 1;
+        bump_left = 1;
+        bump_any = 1;
+      }
+
+      if (self->right_side_stall_count >= SIDE_STALL_COUNT_LIMIT) {
+        side_contact_right = 1;
+        bump_right = 1;
+        bump_any = 1;
+      }
+    }
+
+    if (self->drive_mode == DRIVE_FORWARD) {
+      if (bump_any) {
+        float dx_from_last_turn = self->x_m - self->last_turn_x_m;
+        float dy_from_last_turn = self->y_m - self->last_turn_y_m;
+        float distance_after_last_turn_m = sqrtf(
+          dx_from_last_turn * dx_from_last_turn +
+          dy_from_last_turn * dy_from_last_turn
+        );
+
+        int immediate_after_turn = 0;
+        if (self->have_last_turn &&
+            distance_after_last_turn_m < IMMEDIATE_BUMP_AFTER_TURN_DISTANCE_M) {
+          immediate_after_turn = 1;
+        }
+
+        if (bump_left && bump_right) {
+          if (immediate_after_turn) {
+            self->turn_target_deg = IMMEDIATE_BUMP_TURN_DEG;
+          } else {
+            self->turn_target_deg = BOTH_BUMP_TURN_DEG;
+          }
+
+          if (self->both_bump_turn_toggle == 0) {
+            self->pending_turn_mode = DRIVE_TURN_RIGHT;
+            self->both_bump_turn_toggle = 1;
+          } else {
+            self->pending_turn_mode = DRIVE_TURN_LEFT;
+            self->both_bump_turn_toggle = 0;
+          }
+
+        } else if (side_contact_left || bump_left) {
+          self->turn_target_deg = SINGLE_BUMP_TURN_DEG;
+          self->pending_turn_mode = DRIVE_TURN_RIGHT;
+
+        } else if (side_contact_right || bump_right) {
+          self->turn_target_deg = SINGLE_BUMP_TURN_DEG;
+          self->pending_turn_mode = DRIVE_TURN_LEFT;
+
+        } else {
+          self->turn_target_deg = SINGLE_BUMP_TURN_DEG;
+          self->pending_turn_mode = DRIVE_TURN_RIGHT;
+        }
+
+        self->drive_mode = DRIVE_BACKUP;
+        self->mode_until_us = now_us + MAX_BACKUP_TIME_US;
+        self->backup_start_left_distance_m = self->left_distance_m;
+        self->backup_start_right_distance_m = self->right_distance_m;
+
+        self->left_side_stall_count = 0;
+        self->right_side_stall_count = 0;
+      }
+
+    } else if (self->drive_mode == DRIVE_BACKUP) {
+      float left_backup_m = self->backup_start_left_distance_m - self->left_distance_m;
+      float right_backup_m = self->backup_start_right_distance_m - self->right_distance_m;
+      float avg_backup_m = 0.5f * (left_backup_m + right_backup_m);
+
+      if (avg_backup_m >= BACKUP_DISTANCE_M || now_us >= self->mode_until_us) {
+        self->drive_mode = self->pending_turn_mode;
+        self->turn_start_gyro_z_deg = self->gyro_z_deg;
+        self->mode_until_us = now_us + MAX_TURN_TIME_US;
+      }
+
+    } else if (self->drive_mode == DRIVE_TURN_LEFT || self->drive_mode == DRIVE_TURN_RIGHT) {
+      float turned_deg = abs_float(self->gyro_z_deg - self->turn_start_gyro_z_deg);
+
+      if (turned_deg >= self->turn_target_deg || now_us >= self->mode_until_us) {
+        self->last_turn_x_m = self->x_m;
+        self->last_turn_y_m = self->y_m;
+        self->have_last_turn = 1;
+
+        self->drive_mode = DRIVE_FORWARD;
+      }
+    }
+
+    if (self->drive_mode == DRIVE_FORWARD) {
+      self->left_cmd_milli = FORWARD_BASE_MILLI;
+      self->right_cmd_milli = FORWARD_BASE_MILLI;
+
+      lf_set(motors.left_power, ((float) FORWARD_BASE_MILLI) / 1000.0f);
+      lf_set(motors.right_power, ((float) FORWARD_BASE_MILLI) / 1000.0f);
+
+    } else if (self->drive_mode == DRIVE_BACKUP) {
+      self->left_cmd_milli = -BACKUP_MILLI;
+      self->right_cmd_milli = -BACKUP_MILLI;
+
+      lf_set(motors.left_power, -((float) BACKUP_MILLI) / 1000.0f);
+      lf_set(motors.right_power, -((float) BACKUP_MILLI) / 1000.0f);
+
+    } else if (self->drive_mode == DRIVE_TURN_LEFT) {
+      self->left_cmd_milli = -TURN_MILLI;
+      self->right_cmd_milli = TURN_MILLI;
+
+      lf_set(motors.left_power, -((float) TURN_MILLI) / 1000.0f);
+      lf_set(motors.right_power, ((float) TURN_MILLI) / 1000.0f);
+
+    } else if (self->drive_mode == DRIVE_TURN_RIGHT) {
+      self->left_cmd_milli = TURN_MILLI;
+      self->right_cmd_milli = -TURN_MILLI;
+
+      lf_set(motors.left_power, ((float) TURN_MILLI) / 1000.0f);
+      lf_set(motors.right_power, -((float) TURN_MILLI) / 1000.0f);
+
+    } else {
+      self->left_cmd_milli = 0;
+      self->right_cmd_milli = 0;
+
+      lf_set(motors.left_power, 0.0f);
+      lf_set(motors.right_power, 0.0f);
+    }
+
+    if (self->log_count < LOG_CAPACITY) {
+      log_row_t* row = &log_buffer[self->log_count++];
+
+      row->robot_time_us = now_us;
+      row->robot_elapsed_us = elapsed_us;
+      row->sample = self->sample_index++;
+      row->drive_mode = self->drive_mode;
+      row->bump_left = bump_left;
+      row->bump_right = bump_right;
+      row->left_encoder_deg = self->left_encoder_deg;
+      row->right_encoder_deg = self->right_encoder_deg;
+      row->delta_left_encoder_deg = self->delta_left_encoder_deg;
+      row->delta_right_encoder_deg = self->delta_right_encoder_deg;
+      row->left_distance_m = self->left_distance_m;
+      row->right_distance_m = self->right_distance_m;
+      row->x_m = self->x_m;
+      row->y_m = self->y_m;
+      row->theta_deg = self->theta_rad * 180.0f / PI_F;
+      row->gyro_z_deg = self->gyro_z_deg;
+      row->turn_target_deg = self->turn_target_deg;
+      row->left_cmd_milli = self->left_cmd_milli;
+      row->right_cmd_milli = self->right_cmd_milli;
+    } else {
+      self->log_overflow = 1;
+    }
+
+    self->bump_left_pending = 0;
+    self->bump_right_pending = 0;
+
+    static char buf0[17];
+    snprintf(buf0, 17, "%s", drive_mode_name(self->drive_mode));
+    lf_set(display0, buf0);
+
+    static char buf1[17];
+    snprintf(buf1, 17, "L:%d R:%d", bump_left, bump_right);
+    lf_set(display1, buf1);
+
+    static char buf2[17];
+    snprintf(buf2, 17, "g:%.1f t:%.0f", self->gyro_z_deg, self->turn_target_deg);
+    lf_set(display2, buf2);
+  =}
+}
+
+main reactor {
+  robot = new Robot()
+
+  display = new Display()
+  robot.display0, robot.display1, robot.display2, robot.display3 -> display.line0, display.line1, display.line2, display.line3
+}

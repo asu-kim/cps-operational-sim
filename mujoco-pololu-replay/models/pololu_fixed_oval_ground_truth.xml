@@ -1,0 +1,120 @@
+<mujoco model="fixed_stadium_racetrack">
+  <compiler angle="degree"/>
+  <option timestep="0.01" gravity="0 0 -9.81"/>
+  <visual>
+    <global azimuth="90" elevation="-90"/>
+    <rgba haze="1 1 1 1"/>
+  </visual>
+  <asset>
+    <material name="floor_mat" rgba="1 1 1 1"/>
+    <material name="track_mat" rgba="0 0 0 1"/>
+    <material name="robot_mat" rgba="0.1 0.3 0.9 1"/>
+    <material name="front_mat" rgba="1 0 0 1"/>
+  </asset>
+  <worldbody>
+    <geom name="floor" type="plane" pos="0.209550 0.095250 0" size="1.409600 1.409600 0.02" material="floor_mat"/>
+    <geom name="ground_truth_0000" type="capsule" fromto="0.000000 0.000000 0.006 0.419100 0.000000 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0001" type="capsule" fromto="0.419100 0.000000 0.006 0.425330 0.000204 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0002" type="capsule" fromto="0.425330 0.000204 0.006 0.431533 0.000815 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0003" type="capsule" fromto="0.431533 0.000815 0.006 0.437682 0.001830 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0004" type="capsule" fromto="0.437682 0.001830 0.006 0.443753 0.003246 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0005" type="capsule" fromto="0.443753 0.003246 0.006 0.449717 0.005055 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0006" type="capsule" fromto="0.449717 0.005055 0.006 0.455551 0.007250 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0007" type="capsule" fromto="0.455551 0.007250 0.006 0.461228 0.009823 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0008" type="capsule" fromto="0.461228 0.009823 0.006 0.466725 0.012761 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0009" type="capsule" fromto="0.466725 0.012761 0.006 0.472018 0.016053 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0010" type="capsule" fromto="0.472018 0.016053 0.006 0.477085 0.019683 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0011" type="capsule" fromto="0.477085 0.019683 0.006 0.481903 0.023637 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0012" type="capsule" fromto="0.481903 0.023637 0.006 0.486452 0.027898 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0013" type="capsule" fromto="0.486452 0.027898 0.006 0.490713 0.032447 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0014" type="capsule" fromto="0.490713 0.032447 0.006 0.494667 0.037265 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0015" type="capsule" fromto="0.494667 0.037265 0.006 0.498297 0.042332 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0016" type="capsule" fromto="0.498297 0.042332 0.006 0.501589 0.047625 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0017" type="capsule" fromto="0.501589 0.047625 0.006 0.504527 0.053122 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0018" type="capsule" fromto="0.504527 0.053122 0.006 0.507100 0.058799 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0019" type="capsule" fromto="0.507100 0.058799 0.006 0.509295 0.064633 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0020" type="capsule" fromto="0.509295 0.064633 0.006 0.511104 0.070597 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0021" type="capsule" fromto="0.511104 0.070597 0.006 0.512520 0.076668 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0022" type="capsule" fromto="0.512520 0.076668 0.006 0.513535 0.082817 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0023" type="capsule" fromto="0.513535 0.082817 0.006 0.514146 0.089020 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0024" type="capsule" fromto="0.514146 0.089020 0.006 0.514350 0.095250 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0025" type="capsule" fromto="0.514350 0.095250 0.006 0.514146 0.101480 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0026" type="capsule" fromto="0.514146 0.101480 0.006 0.513535 0.107683 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0027" type="capsule" fromto="0.513535 0.107683 0.006 0.512520 0.113832 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0028" type="capsule" fromto="0.512520 0.113832 0.006 0.511104 0.119903 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0029" type="capsule" fromto="0.511104 0.119903 0.006 0.509295 0.125867 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0030" type="capsule" fromto="0.509295 0.125867 0.006 0.507100 0.131701 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0031" type="capsule" fromto="0.507100 0.131701 0.006 0.504527 0.137378 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0032" type="capsule" fromto="0.504527 0.137378 0.006 0.501589 0.142875 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0033" type="capsule" fromto="0.501589 0.142875 0.006 0.498297 0.148168 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0034" type="capsule" fromto="0.498297 0.148168 0.006 0.494667 0.153235 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0035" type="capsule" fromto="0.494667 0.153235 0.006 0.490713 0.158053 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0036" type="capsule" fromto="0.490713 0.158053 0.006 0.486452 0.162602 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0037" type="capsule" fromto="0.486452 0.162602 0.006 0.481903 0.166863 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0038" type="capsule" fromto="0.481903 0.166863 0.006 0.477085 0.170817 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0039" type="capsule" fromto="0.477085 0.170817 0.006 0.472018 0.174447 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0040" type="capsule" fromto="0.472018 0.174447 0.006 0.466725 0.177739 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0041" type="capsule" fromto="0.466725 0.177739 0.006 0.461228 0.180677 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0042" type="capsule" fromto="0.461228 0.180677 0.006 0.455551 0.183250 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0043" type="capsule" fromto="0.455551 0.183250 0.006 0.449717 0.185445 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0044" type="capsule" fromto="0.449717 0.185445 0.006 0.443753 0.187254 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0045" type="capsule" fromto="0.443753 0.187254 0.006 0.437682 0.188670 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0046" type="capsule" fromto="0.437682 0.188670 0.006 0.431533 0.189685 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0047" type="capsule" fromto="0.431533 0.189685 0.006 0.425330 0.190296 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0048" type="capsule" fromto="0.425330 0.190296 0.006 0.419100 0.190500 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0049" type="capsule" fromto="0.419100 0.190500 0.006 0.000000 0.190500 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0050" type="capsule" fromto="0.000000 0.190500 0.006 -0.006230 0.190296 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0051" type="capsule" fromto="-0.006230 0.190296 0.006 -0.012433 0.189685 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0052" type="capsule" fromto="-0.012433 0.189685 0.006 -0.018582 0.188670 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0053" type="capsule" fromto="-0.018582 0.188670 0.006 -0.024653 0.187254 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0054" type="capsule" fromto="-0.024653 0.187254 0.006 -0.030617 0.185445 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0055" type="capsule" fromto="-0.030617 0.185445 0.006 -0.036451 0.183250 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0056" type="capsule" fromto="-0.036451 0.183250 0.006 -0.042128 0.180677 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0057" type="capsule" fromto="-0.042128 0.180677 0.006 -0.047625 0.177739 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0058" type="capsule" fromto="-0.047625 0.177739 0.006 -0.052918 0.174447 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0059" type="capsule" fromto="-0.052918 0.174447 0.006 -0.057985 0.170817 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0060" type="capsule" fromto="-0.057985 0.170817 0.006 -0.062803 0.166863 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0061" type="capsule" fromto="-0.062803 0.166863 0.006 -0.067352 0.162602 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0062" type="capsule" fromto="-0.067352 0.162602 0.006 -0.071613 0.158053 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0063" type="capsule" fromto="-0.071613 0.158053 0.006 -0.075567 0.153235 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0064" type="capsule" fromto="-0.075567 0.153235 0.006 -0.079197 0.148168 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0065" type="capsule" fromto="-0.079197 0.148168 0.006 -0.082489 0.142875 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0066" type="capsule" fromto="-0.082489 0.142875 0.006 -0.085427 0.137378 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0067" type="capsule" fromto="-0.085427 0.137378 0.006 -0.088000 0.131701 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0068" type="capsule" fromto="-0.088000 0.131701 0.006 -0.090195 0.125867 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0069" type="capsule" fromto="-0.090195 0.125867 0.006 -0.092004 0.119903 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0070" type="capsule" fromto="-0.092004 0.119903 0.006 -0.093420 0.113832 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0071" type="capsule" fromto="-0.093420 0.113832 0.006 -0.094435 0.107683 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0072" type="capsule" fromto="-0.094435 0.107683 0.006 -0.095046 0.101480 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0073" type="capsule" fromto="-0.095046 0.101480 0.006 -0.095250 0.095250 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0074" type="capsule" fromto="-0.095250 0.095250 0.006 -0.095046 0.089020 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0075" type="capsule" fromto="-0.095046 0.089020 0.006 -0.094435 0.082817 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0076" type="capsule" fromto="-0.094435 0.082817 0.006 -0.093420 0.076668 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0077" type="capsule" fromto="-0.093420 0.076668 0.006 -0.092004 0.070597 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0078" type="capsule" fromto="-0.092004 0.070597 0.006 -0.090195 0.064633 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0079" type="capsule" fromto="-0.090195 0.064633 0.006 -0.088000 0.058799 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0080" type="capsule" fromto="-0.088000 0.058799 0.006 -0.085427 0.053122 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0081" type="capsule" fromto="-0.085427 0.053122 0.006 -0.082489 0.047625 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0082" type="capsule" fromto="-0.082489 0.047625 0.006 -0.079197 0.042332 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0083" type="capsule" fromto="-0.079197 0.042332 0.006 -0.075567 0.037265 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0084" type="capsule" fromto="-0.075567 0.037265 0.006 -0.071613 0.032447 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0085" type="capsule" fromto="-0.071613 0.032447 0.006 -0.067352 0.027898 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0086" type="capsule" fromto="-0.067352 0.027898 0.006 -0.062803 0.023637 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0087" type="capsule" fromto="-0.062803 0.023637 0.006 -0.057985 0.019683 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0088" type="capsule" fromto="-0.057985 0.019683 0.006 -0.052918 0.016053 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0089" type="capsule" fromto="-0.052918 0.016053 0.006 -0.047625 0.012761 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0090" type="capsule" fromto="-0.047625 0.012761 0.006 -0.042128 0.009823 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0091" type="capsule" fromto="-0.042128 0.009823 0.006 -0.036451 0.007250 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0092" type="capsule" fromto="-0.036451 0.007250 0.006 -0.030617 0.005055 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0093" type="capsule" fromto="-0.030617 0.005055 0.006 -0.024653 0.003246 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0094" type="capsule" fromto="-0.024653 0.003246 0.006 -0.018582 0.001830 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0095" type="capsule" fromto="-0.018582 0.001830 0.006 -0.012433 0.000815 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0096" type="capsule" fromto="-0.012433 0.000815 0.006 -0.006230 0.000204 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <geom name="ground_truth_0097" type="capsule" fromto="-0.006230 0.000204 0.006 -0.000000 0.000000 0.006" size="0.015000" material="track_mat" contype="0" conaffinity="0"/>
+    <body name="pololu" pos="0.000000 0.000000 0.040000" quat="1.000000 0 0 0.000000">
+      <freejoint name="pololu_free"/>
+      <geom name="robot_body" type="box" size="0.045 0.035 0.02" material="robot_mat"/>
+      <geom name="robot_front" type="box" pos="0.045 0 0.012" size="0.015 0.025 0.01" material="front_mat"/>
+    </body>
+  </worldbody>
+</mujoco>

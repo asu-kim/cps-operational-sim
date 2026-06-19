@@ -1,3 +1,6 @@
 [submodule "pololu-3pi/pico-sdk"]
 	path = pololu-3pi/pico-sdk
 	url = https://github.com/raspberrypi/pico-sdk.git
+[submodule "mujoco-c"]
+	path = mujoco-c
+	url = https://github.com/lf-lang/mujoco-c.git

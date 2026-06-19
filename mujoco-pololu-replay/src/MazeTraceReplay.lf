@@ -1,0 +1,492 @@
+target C {
+  keepalive: true,
+  platform: {
+    name: "Linux"
+  },
+  cmake-include: "/home/pawan/cps-operational-sim/mujoco-pololu-replay/../mujoco-c/src/include/mujoco.cmake"
+}
+
+preamble {=
+  #include <stdio.h>
+  #include <stdlib.h>
+  #include <string.h>
+  #include <stdbool.h>
+  #include <stdint.h>
+  #include <math.h>
+  #include <GLFW/glfw3.h>
+  #include <mujoco/mujoco.h>
+
+  #define MAX_ROWS 50000
+  #define LINE_BUF 2048
+  #define MAX_FIELDS 128
+
+  typedef struct {
+    double x;
+    double y;
+    double theta_deg;
+    int64_t elapsed_us;
+  } pose_row_t;
+
+  typedef struct {
+    mjModel* m;
+    mjData* d;
+    mjvCamera cam;
+    mjvOption opt;
+    mjvScene scn;
+    mjrContext con;
+  } mujoco_view_t;
+
+  static pose_row_t rows[MAX_ROWS];
+  static int row_count = 0;
+  static int x_idx = -1;
+  static int y_idx = -1;
+  static int theta_idx = -1;
+  static int elapsed_idx = -1;
+  static int robot_time_idx = -1;
+
+  static double min_x = 0.0;
+  static double max_x = 0.0;
+  static double min_y = 0.0;
+  static double max_y = 0.0;
+
+  static int split_csv(char* line, char** fields, int max_fields) {
+    int n = 0;
+    char* p = line;
+
+    while (n < max_fields) {
+      fields[n++] = p;
+      char* comma = strchr(p, ',');
+      if (!comma) break;
+      *comma = '\0';
+      p = comma + 1;
+    }
+
+    return n;
+  }
+
+  static void strip(char* s) {
+    s[strcspn(s, "\r\n")] = '\0';
+  }
+
+  static void detect_header(char* line) {
+    char* fields[MAX_FIELDS];
+    int n = split_csv(line, fields, MAX_FIELDS);
+
+    x_idx = -1;
+    y_idx = -1;
+    theta_idx = -1;
+    elapsed_idx = -1;
+    robot_time_idx = -1;
+
+    for (int i = 0; i < n; i++) {
+      strip(fields[i]);
+
+      if (strcmp(fields[i], "x_m") == 0) {
+        x_idx = i;
+      } else if (strcmp(fields[i], "y_m") == 0) {
+        y_idx = i;
+      } else if (strcmp(fields[i], "theta_deg") == 0) {
+        theta_idx = i;
+      } else if (strcmp(fields[i], "robot_elapsed_us") == 0) {
+        elapsed_idx = i;
+      } else if (strcmp(fields[i], "robot_time_us") == 0) {
+        robot_time_idx = i;
+      }
+    }
+
+    if (x_idx < 0 || y_idx < 0 || theta_idx < 0) {
+      fprintf(stderr, "ERROR: CSV must contain x_m, y_m, theta_deg columns.\n");
+      fprintf(stderr, "Detected x_idx=%d y_idx=%d theta_idx=%d\n", x_idx, y_idx, theta_idx);
+    }
+
+    if (elapsed_idx < 0 && robot_time_idx < 0) {
+      fprintf(stderr, "ERROR: CSV must contain robot_elapsed_us or robot_time_us for logical-time replay.\n");
+      fprintf(stderr, "Detected elapsed_idx=%d robot_time_idx=%d\n", elapsed_idx, robot_time_idx);
+    }
+  }
+
+  static int64_t parse_time_us(char** fields, int n) {
+    if (elapsed_idx >= 0 && elapsed_idx < n) {
+      return (int64_t)atoll(fields[elapsed_idx]);
+    }
+    if (robot_time_idx >= 0 && robot_time_idx < n) {
+      return (int64_t)atoll(fields[robot_time_idx]);
+    }
+    return 0;
+  }
+
+  static void load_csv(const char* path) {
+    FILE* f = fopen(path, "r");
+    if (!f) {
+      fprintf(stderr, "ERROR: Could not open CSV: %s\n", path);
+      return;
+    }
+
+    char line[LINE_BUF];
+
+    if (!fgets(line, sizeof(line), f)) {
+      fclose(f);
+      return;
+    }
+
+    strip(line);
+    detect_header(line);
+
+    row_count = 0;
+    int64_t first_elapsed_us = 0;
+    bool have_first_elapsed = false;
+
+    while (fgets(line, sizeof(line), f) && row_count < MAX_ROWS) {
+      strip(line);
+      if (line[0] == '\0') continue;
+
+      char* fields[MAX_FIELDS];
+      int n = split_csv(line, fields, MAX_FIELDS);
+
+      if (x_idx < 0 || y_idx < 0 || theta_idx < 0) continue;
+      if (x_idx >= n || y_idx >= n || theta_idx >= n) continue;
+      if (elapsed_idx < 0 && robot_time_idx < 0) continue;
+
+      int64_t t_us = parse_time_us(fields, n);
+      if (!have_first_elapsed) {
+        first_elapsed_us = t_us;
+        have_first_elapsed = true;
+      }
+
+      rows[row_count].x = atof(fields[x_idx]);
+      rows[row_count].y = atof(fields[y_idx]);
+      rows[row_count].theta_deg = atof(fields[theta_idx]);
+      rows[row_count].elapsed_us = t_us - first_elapsed_us;
+
+      if (row_count > 0 && rows[row_count].elapsed_us < rows[row_count - 1].elapsed_us) {
+        fprintf(stderr,
+          "WARNING: non-monotonic timestamp at row %d: %lld us after %lld us. Clamping.\n",
+          row_count,
+          (long long)rows[row_count].elapsed_us,
+          (long long)rows[row_count - 1].elapsed_us
+        );
+        rows[row_count].elapsed_us = rows[row_count - 1].elapsed_us;
+      }
+
+      if (row_count == 0) {
+        min_x = max_x = rows[row_count].x;
+        min_y = max_y = rows[row_count].y;
+      } else {
+        if (rows[row_count].x < min_x) min_x = rows[row_count].x;
+        if (rows[row_count].x > max_x) max_x = rows[row_count].x;
+        if (rows[row_count].y < min_y) min_y = rows[row_count].y;
+        if (rows[row_count].y > max_y) max_y = rows[row_count].y;
+      }
+
+      row_count++;
+    }
+
+    fclose(f);
+
+    printf("Loaded %d pose rows from %s\n", row_count, path);
+    if (row_count > 0) {
+      printf("Replay time span: %.3f seconds\n", rows[row_count - 1].elapsed_us / 1000000.0);
+      if (elapsed_idx >= 0) {
+        printf("Using robot_elapsed_us for LF logical-time scheduling.\n");
+      } else {
+        printf("Using robot_time_us for LF logical-time scheduling.\n");
+      }
+    }
+    fflush(stdout);
+  }
+
+  static int64_t next_delay_us(int current_row) {
+    if (current_row < 0 || current_row + 1 >= row_count) {
+      return -1;
+    }
+
+    int64_t dt = rows[current_row + 1].elapsed_us - rows[current_row].elapsed_us;
+    if (dt < 0) dt = 0;
+    return dt;
+  }
+
+  static void set_robot_pose(
+      mjModel* m,
+      mjData* d,
+      const char* joint_name,
+      double x,
+      double y,
+      double theta_deg
+  ) {
+    int jid = mj_name2id(m, mjOBJ_JOINT, joint_name);
+    if (jid < 0) {
+      fprintf(stderr, "ERROR: Joint not found: %s\n", joint_name);
+      return;
+    }
+
+    int qadr = m->jnt_qposadr[jid];
+
+    double yaw = theta_deg * M_PI / 180.0;
+    double half = 0.5 * yaw;
+
+    d->qpos[qadr + 0] = x;
+    d->qpos[qadr + 1] = y;
+    d->qpos[qadr + 2] = 0.04;
+    d->qpos[qadr + 3] = cos(half);
+    d->qpos[qadr + 4] = 0.0;
+    d->qpos[qadr + 5] = 0.0;
+    d->qpos[qadr + 6] = sin(half);
+
+    mj_forward(m, d);
+  }
+
+  static void add_trace_segment(
+      mjvScene* scn,
+      double x1,
+      double y1,
+      double x2,
+      double y2,
+      double radius
+  ) {
+    if (scn->ngeom >= scn->maxgeom) {
+      return;
+    }
+
+    double dx = x2 - x1;
+    double dy = y2 - y1;
+    if (sqrt(dx * dx + dy * dy) < 1e-6) {
+      return;
+    }
+
+    float trace_rgba[4] = {1.0f, 0.15f, 0.0f, 1.0f};
+    mjtNum from[3] = {x1, y1, 0.018};
+    mjtNum to[3] = {x2, y2, 0.018};
+
+    mjvGeom* g = scn->geoms + scn->ngeom;
+    scn->ngeom++;
+
+    mjv_initGeom(g, mjGEOM_CAPSULE, NULL, NULL, NULL, trace_rgba);
+    mjv_connector(g, mjGEOM_CAPSULE, radius, from, to);
+  }
+
+  static void add_trace_so_far(mjvScene* scn, int current_row) {
+    if (current_row < 1) {
+      return;
+    }
+
+    int last = current_row;
+    if (last >= row_count) {
+      last = row_count - 1;
+    }
+
+    for (int i = 0; i < last; i++) {
+      add_trace_segment(
+        scn,
+        rows[i].x,
+        rows[i].y,
+        rows[i + 1].x,
+        rows[i + 1].y,
+        0.008
+      );
+    }
+  }
+
+  static void render_scene(
+      GLFWwindow* window,
+      mujoco_view_t* v,
+      int current_row,
+      const char* overlay
+  ) {
+    mjrRect viewport = {0, 0, 0, 0};
+    glfwGetFramebufferSize(window, &viewport.width, &viewport.height);
+
+    mjv_updateScene(v->m, v->d, &v->opt, NULL, &v->cam, mjCAT_ALL, &v->scn);
+
+    add_trace_so_far(&v->scn, current_row);
+
+    mjr_render(viewport, &v->scn, &v->con);
+
+    mjr_overlay(
+      mjFONT_SHADOW,
+      mjGRID_BOTTOMLEFT,
+      viewport,
+      overlay,
+      NULL,
+      &v->con
+    );
+
+    glfwSwapBuffers(window);
+    glfwPollEvents();
+  }
+  static int64_t monotonic_time_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ((int64_t)ts.tv_sec * 1000000000LL) + (int64_t)ts.tv_nsec;
+  }
+
+  static int find_row_for_elapsed_us(int64_t target_us, int current_index) {
+    if (row_count <= 0) {
+      return 0;
+    }
+
+    if (target_us <= rows[0].elapsed_us) {
+      return 0;
+    }
+
+    int i = current_index;
+    if (i < 0) {
+      i = 0;
+    }
+    if (i >= row_count) {
+      i = row_count - 1;
+    }
+
+    while (i + 1 < row_count && rows[i + 1].elapsed_us <= target_us) {
+      i++;
+    }
+
+    return i;
+  }
+
+=}
+
+main reactor(render_period: time = 16 ms) {
+  timer render_tick(0, render_period)
+
+  state window: GLFWwindow* = {= NULL =}
+  state view: mujoco_view_t = {= {.m = NULL, .d = NULL} =}
+  state row_index: int = 0
+  state done: int = 0
+  state replay_start_ns: int64_t = 0
+
+  reaction(startup) {=
+    lf_print("*** Maze trace replay paced by physical wall-clock time.");
+    lf_print("*** Black = fixed square ground truth, 11 in side length.");
+    lf_print("*** Orange/red = route trace drawn while robot moves through maze.");
+    lf_print("*** Row selection uses physical elapsed time matched to robot_elapsed_us.");
+    lf_print("*** Close the window to stop.");
+
+    load_csv("/home/pawan/cps-operational-sim/mujoco-pololu-replay/data/maze_log.csv");
+
+    char error[1000] = "Could not load model";
+    self->view.m = mj_loadXML("/home/pawan/cps-operational-sim/mujoco-pololu-replay/models/pololu_maze_ground_truth.xml", 0, error, 1000);
+    if (!self->view.m) {
+      mju_error("Load model error: %s", error);
+    }
+
+    self->view.d = mj_makeData(self->view.m);
+
+    if (!glfwInit()) {
+      mju_error("Could not initialize GLFW");
+    }
+
+    self->window = glfwCreateWindow(1200, 900, "Pololu Square Track Trace Replay", NULL, NULL);
+    if (!self->window) {
+      mju_error("Could not create GLFW window");
+    }
+
+    glfwMakeContextCurrent(self->window);
+
+    // Disable vsync so rendering does not add one monitor-refresh wait per frame.
+    glfwSwapInterval(0);
+
+    mjv_defaultCamera(&self->view.cam);
+    mjv_defaultOption(&self->view.opt);
+    mjv_defaultScene(&self->view.scn);
+    mjr_defaultContext(&self->view.con);
+
+    mjv_makeScene(self->view.m, &self->view.scn, 20000);
+    mjr_makeContext(self->view.m, &self->view.con, mjFONTSCALE_150);
+
+    double cx = 0.5 * (min_x + max_x);
+    double cy = 0.5 * (min_y + max_y);
+    double span_x = max_x - min_x;
+    double span_y = max_y - min_y;
+    double span = span_x > span_y ? span_x : span_y;
+    if (span < 0.5) span = 0.5;
+
+    self->view.cam.lookat[0] = cx;
+    self->view.cam.lookat[1] = cy;
+    self->view.cam.lookat[2] = 0.0;
+    self->view.cam.distance = span * 1.7;
+    self->view.cam.azimuth = 90.0;
+    self->view.cam.elevation = -90.0;
+
+    if (row_count > 0) {
+      set_robot_pose(
+        self->view.m,
+        self->view.d,
+        "pololu_free",
+        rows[0].x,
+        rows[0].y,
+        rows[0].theta_deg
+      );
+    }
+
+    self->replay_start_ns = monotonic_time_ns();
+  =}
+
+  reaction(render_tick) {=
+    if (glfwWindowShouldClose(self->window)) {
+      lf_request_stop();
+      return;
+    }
+
+    if (row_count <= 0) {
+      render_scene(self->window, &self->view, 0, "No CSV rows loaded");
+      return;
+    }
+
+    int64_t now_ns = monotonic_time_ns();
+    int64_t physical_elapsed_us = (now_ns - self->replay_start_ns) / 1000LL;
+
+    int i = find_row_for_elapsed_us(physical_elapsed_us, self->row_index);
+    self->row_index = i;
+
+    if (physical_elapsed_us >= rows[row_count - 1].elapsed_us) {
+      i = row_count - 1;
+      self->row_index = i;
+      self->done = 1;
+    }
+
+    set_robot_pose(
+      self->view.m,
+      self->view.d,
+      "pololu_free",
+      rows[i].x,
+      rows[i].y,
+      rows[i].theta_deg
+    );
+
+    char overlay[360];
+    snprintf(
+      overlay,
+      sizeof(overlay),
+      "row %d / %d   robot %.3f s   physical %.3f s   x %.3f   y %.3f   theta %.1f%s",
+      i,
+      row_count,
+      rows[i].elapsed_us / 1000000.0,
+      physical_elapsed_us / 1000000.0,
+      rows[i].x,
+      rows[i].y,
+      rows[i].theta_deg,
+      self->done ? "   DONE" : ""
+    );
+
+    render_scene(self->window, &self->view, i, overlay);
+
+    // Keep final frame visible. Close the window to stop.
+    // If you want the program to exit immediately at 69.650 s, uncomment:
+    // if (self->done) { lf_request_stop(); }
+  =}
+
+  reaction(shutdown) {=
+    if (self->view.m) {
+      mjv_freeScene(&self->view.scn);
+      mjr_freeContext(&self->view.con);
+      mj_deleteData(self->view.d);
+      mj_deleteModel(self->view.m);
+    }
+
+    if (self->window) {
+      glfwDestroyWindow(self->window);
+    }
+
+    glfwTerminate();
+  =}
+}

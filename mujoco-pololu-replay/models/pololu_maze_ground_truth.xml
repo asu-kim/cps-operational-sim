@@ -1,0 +1,35 @@
+<mujoco model="pololu_maze_ground_truth">
+  <compiler angle="degree"/>
+  <option timestep="0.01" gravity="0 0 -9.81"/>
+  <visual>
+    <global azimuth="90" elevation="-90"/>
+    <rgba haze="1 1 1 1"/>
+  </visual>
+
+  <asset>
+    <material name="floor_mat" rgba="1 1 1 1"/>
+    <material name="wall_mat" rgba="0 0 0 1"/>
+    <material name="robot_mat" rgba="0.1 0.3 0.9 1"/>
+    <material name="front_mat" rgba="1 0 0 1"/>
+  </asset>
+
+  <worldbody>
+    <geom name="floor" type="plane" size="0.775000 0.490000 0.02" pos="0.475000 -0.140000 0" material="floor_mat"/>
+
+    <geom name="gt_wall_000" type="box" pos="0.105000 0.100000 0.050000" euler="0 0 0.000000" size="0.155000 0.010000 0.050000" material="wall_mat"/>
+    <geom name="gt_wall_001" type="box" pos="0.260000 0.032500 0.050000" euler="0 0 -90.000000" size="0.067500 0.010000 0.050000" material="wall_mat"/>
+    <geom name="gt_wall_002" type="box" pos="0.460000 -0.035000 0.050000" euler="0 0 0.000000" size="0.200000 0.010000 0.050000" material="wall_mat"/>
+    <geom name="gt_wall_003" type="box" pos="0.660000 -0.092500 0.050000" euler="0 0 -90.000000" size="0.057500 0.010000 0.050000" material="wall_mat"/>
+    <geom name="gt_wall_004" type="box" pos="0.830000 -0.150000 0.050000" euler="0 0 0.000000" size="0.170000 0.010000 0.050000" material="wall_mat"/>
+    <geom name="gt_wall_005" type="box" pos="0.025000 -0.035000 0.050000" euler="0 0 0.000000" size="0.075000 0.010000 0.050000" material="wall_mat"/>
+    <geom name="gt_wall_006" type="box" pos="0.100000 -0.207500 0.050000" euler="0 0 -90.000000" size="0.172500 0.010000 0.050000" material="wall_mat"/>
+    <geom name="gt_wall_007" type="box" pos="0.550000 -0.380000 0.050000" euler="0 0 0.000000" size="0.450000 0.010000 0.050000" material="wall_mat"/>
+    <geom name="gt_wall_008" type="box" pos="0.490000 -0.265000 0.050000" euler="0 0 90.000000" size="0.115000 0.010000 0.050000" material="wall_mat"/>
+
+    <body name="pololu" pos="0 0 0.04">
+      <freejoint name="pololu_free"/>
+      <geom name="robot_body" type="box" size="0.045 0.035 0.02" material="robot_mat"/>
+      <geom name="robot_front" type="box" pos="0.045 0 0.012" size="0.015 0.025 0.01" material="front_mat"/>
+    </body>
+  </worldbody>
+</mujoco>

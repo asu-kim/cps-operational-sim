@@ -1,0 +1,30 @@
+[package]
+name = "mujoco-pololu-replay"
+version = "0.1.0"
+
+[[app]]
+name = "MazeTraceReplay"
+main = "src/MazeTraceReplay.lf"
+target = "C"
+platform = "Native"
+
+[app.properties]
+
+[[app]]
+name = "RacetrackTraceReplayOval"
+main = "src/RacetrackTraceReplay.lf"
+target = "C"
+platform = "Native"
+
+[app.properties]
+
+[[app]]
+name = "RacetrackTraceReplaySquare"
+main = "src/RacetrackTraceReplay_square.lf"
+target = "C"
+platform = "Native"
+
+[app.properties]
+
+[dependencies]
+mujoco-c = { version = ">=0.1", path = "../mujoco-c" }

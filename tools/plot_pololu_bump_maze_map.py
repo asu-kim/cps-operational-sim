@@ -89,6 +89,37 @@ NUMERIC_COLUMNS = [
     "right_cmd_milli",
 ]
 
+GROUND_TRUTH_WALLS_M = [
+    # Top-left start corridor
+    ((-0.05,  0.1), (0.26,  0.1)),
+
+    # Vertical drop after start corridor
+    ((0.26,  0.1), (0.26, -0.035)),
+
+    # Upper middle horizontal wall
+    ((0.26, -0.035), (0.66, -0.035)),
+
+    # Right vertical wall
+    ((0.66, -0.035), (0.66, -0.15)),
+
+    # Short right-side end wall
+    ((0.66, -0.15), (1.0, -0.15)),
+
+    # Left short horizontal wall below start
+    ((-0.05, -0.035), (0.10, -0.035)),
+
+    # Long left vertical wall
+    ((0.10, -0.035), (0.10, -0.38)),
+
+    # Bottom horizontal wall left side
+    ((0.10, -0.38), (1.0, -0.38)),
+
+    # # Bottom horizontal wall right side
+    # ((0.49, -0.38), (1.0, -0.30)),
+
+    # Middle vertical divider near bottom
+    ((0.49, -0.38), (0.49, -0.15)),
+]
 
 def read_log(csv_path: Path) -> pd.DataFrame:
     """Read logs even when the header and data rows have different widths.
@@ -230,10 +261,27 @@ def set_equal_axes(ax):
     ax.set_xlabel("x position (m)")
     ax.set_ylabel("y position (m)")
 
+def plot_ground_truth(ax, walls):
+    """Plot ground-truth maze walls on the same axes as the robot path."""
+    first = True
 
-def plot_path_contacts(df: pd.DataFrame, contacts: pd.DataFrame, out_base: Path, heading_stride: int):
+    for (x1, y1), (x2, y2) in walls:
+        ax.plot(
+            [x1, x2],
+            [y1, y2],
+            color="black",
+            linewidth=2.5,
+            alpha=0.85,
+            label="ground truth maze" if first else None,
+        )
+        first = False
+
+def plot_path_contacts(df: pd.DataFrame, contacts: pd.DataFrame, out_base: Path, heading_stride: int, show_ground_truth: bool,):
     fig, ax = plt.subplots(figsize=(8, 8))
 
+    if show_ground_truth:
+        plot_ground_truth(ax, GROUND_TRUTH_WALLS_M)
+    
     ax.plot(df["x_m"], df["y_m"], linewidth=1.8, label="estimated robot path")
     ax.scatter(df["x_m"].iloc[0], df["y_m"].iloc[0], marker="o", s=70, label="start")
     ax.scatter(df["x_m"].iloc[-1], df["y_m"].iloc[-1], marker="s", s=70, label="end")
@@ -314,6 +362,7 @@ def main() -> None:
     parser.add_argument("--bump-lateral-offset-m", default=0.025, type=float, help="Left/right lateral offset for single-side contacts")
     parser.add_argument("--grid-resolution-m", default=0.025, type=float, help="Contact-grid cell size")
     parser.add_argument("--heading-stride", default=5, type=int, help="Draw one heading arrow every N samples; use 0 to disable")
+    parser.add_argument("--hide-ground-truth", action="store_true", help="Do not draw the ground-truth maze walls")
     args = parser.parse_args()
 
     df = read_log(args.csv)
@@ -326,7 +375,7 @@ def main() -> None:
     if not contacts.empty:
         contacts.to_csv(out_base.with_name(out_base.name + "_contacts.csv"), index=False)
 
-    plot_path_contacts(df, contacts, out_base, args.heading_stride)
+    plot_path_contacts(df, contacts, out_base, args.heading_stride, show_ground_truth=not args.hide_ground_truth,)
     plot_contact_grid(contacts, out_base, args.grid_resolution_m)
 
     print(f"Read rows: {len(df)}")

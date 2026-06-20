@@ -1,0 +1,40 @@
+target C {
+  platform: {
+    name: "rp2040",
+    board: "pololu_3pi_2040_robot"
+  },
+  single-threaded: true
+}
+
+reactor LineSensorLogFields {
+  input s0: uint16_t
+  input s1: uint16_t
+  input s2: uint16_t
+  input s3: uint16_t
+  input s4: uint16_t
+  input current_state: int
+  input prev_state: int
+  input lost_count: int
+
+  output logged_s0: uint16_t
+  output logged_s1: uint16_t
+  output logged_s2: uint16_t
+  output logged_s3: uint16_t
+  output logged_s4: uint16_t
+  output logged_current_state: int
+  output logged_prev_state: int
+  output logged_lost_count: int
+
+  reaction(s0, s1, s2, s3, s4, current_state, prev_state, lost_count)
+      -> logged_s0, logged_s1, logged_s2, logged_s3, logged_s4,
+         logged_current_state, logged_prev_state, logged_lost_count {=
+    lf_set(logged_s0, s0->value);
+    lf_set(logged_s1, s1->value);
+    lf_set(logged_s2, s2->value);
+    lf_set(logged_s3, s3->value);
+    lf_set(logged_s4, s4->value);
+    lf_set(logged_current_state, current_state->value);
+    lf_set(logged_prev_state, prev_state->value);
+    lf_set(logged_lost_count, lost_count->value);
+  =}
+}

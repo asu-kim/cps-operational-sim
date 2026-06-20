@@ -1,0 +1,20 @@
+target C {
+  platform: {
+    name: "rp2040",
+    board: "pololu_3pi_2040_robot"
+  },
+  single-threaded: true
+}
+
+reactor IMULogFields {
+  input gyro_z_deg: float
+  input turn_target_deg: float
+
+  output logged_gyro_z_deg: float
+  output logged_turn_target_deg: float
+
+  reaction(gyro_z_deg, turn_target_deg) -> logged_gyro_z_deg, logged_turn_target_deg {=
+    lf_set(logged_gyro_z_deg, gyro_z_deg->value);
+    lf_set(logged_turn_target_deg, turn_target_deg->value);
+  =}
+}

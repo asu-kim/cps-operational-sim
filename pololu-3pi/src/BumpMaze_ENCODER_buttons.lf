@@ -11,6 +11,9 @@ import Motors from "lib/Motors.lf"
 import Encoders from "lib/Encoders.lf"
 import BumpAdjustable from "lib/BumpAdjustable.lf"
 import GyroAngle from "lib/IMU.lf"
+import BumpLogFields from "lib/BumpLogFields.lf"
+import EncoderLogFields from "lib/EncoderLogFields.lf"
+import IMULogFields from "lib/IMULogFields.lf"
 
 preamble {=
   #include <stdio.h>
@@ -70,6 +73,8 @@ preamble {=
   typedef struct {
     uint64_t robot_time_us;
     uint64_t robot_elapsed_us;
+    uint64_t logical_elapsed_us;
+    uint64_t sample_period_us;
     uint32_t sample;
     int drive_mode;
     int bump_left;
@@ -92,13 +97,15 @@ preamble {=
   static log_row_t log_buffer[LOG_CAPACITY];
 
   static void dump_log_buffer(int count) {
-    printf("robot_time_us,robot_elapsed_us,sample,mode,bump_left,bump_right,left_encoder_deg,right_encoder_deg,delta_left_encoder_deg,delta_right_encoder_deg,left_distance_m,right_distance_m,x_m,y_m,theta_deg,gyro_z_deg,turn_target_deg,left_cmd_milli,right_cmd_milli\n");
+    printf("robot_time_us,robot_elapsed_us,logical_elapsed_us,sample_period_us,sample,mode,bump_left,bump_right,left_encoder_deg,right_encoder_deg,delta_left_encoder_deg,delta_right_encoder_deg,left_distance_m,right_distance_m,x_m,y_m,theta_deg,gyro_z_deg,turn_target_deg,left_cmd_milli,right_cmd_milli\n");
 
     for (int i = 0; i < count; i++) {
       printf(
-        "%llu,%llu,%lu,%s,%d,%d,%ld,%ld,%ld,%ld,%.5f,%.5f,%.5f,%.5f,%.3f,%.3f,%.3f,%d,%d\n",
+        "%llu,%llu,%llu,%llu,%lu,%s,%d,%d,%ld,%ld,%ld,%ld,%.5f,%.5f,%.5f,%.5f,%.3f,%.3f,%.3f,%d,%d\n",
         (unsigned long long) log_buffer[i].robot_time_us,
         (unsigned long long) log_buffer[i].robot_elapsed_us,
+        (unsigned long long) log_buffer[i].logical_elapsed_us,
+        (unsigned long long) log_buffer[i].sample_period_us,
         (unsigned long) log_buffer[i].sample,
         drive_mode_name(log_buffer[i].drive_mode),
         log_buffer[i].bump_left,
@@ -214,6 +221,12 @@ reactor Robot(
   state right_cmd_milli: int = 0
 
   state log_start_time_us: uint64_t = 0
+  state log_robot_time_us: uint64_t = 0
+  state log_robot_elapsed_us: uint64_t = 0
+  state log_logical_elapsed_us: uint64_t = 0
+  state log_sample_period_us: uint64_t = 0
+  state log_sample: uint32_t = 0
+  state log_drive_mode: int = 0
 
   state encoder_baseline_set: int = 0
   state prev_left_encoder_deg: int32_t = 0
@@ -247,6 +260,10 @@ reactor Robot(
   encoder = new Encoders()
   bump = new BumpAdjustable(sample_period = 20 ms, calibrate_samples = 80, release_percent = 110, press_percent = 118)
   gyro = new GyroAngle()
+  bump_log = new BumpLogFields()
+  left_encoder_log = new EncoderLogFields()
+  right_encoder_log = new EncoderLogFields()
+  imu_log = new IMULogFields()
 
   reaction(startup) -> display0, display1, display2, motors.left_power, motors.right_power {=
     self->elapsed_seconds = 0;
@@ -269,6 +286,12 @@ reactor Robot(
     self->right_cmd_milli = 0;
 
     self->log_start_time_us = time_us_64();
+    self->log_robot_time_us = 0;
+    self->log_robot_elapsed_us = 0;
+    self->log_logical_elapsed_us = 0;
+    self->log_sample_period_us = 0;
+    self->log_sample = 0;
+    self->log_drive_mode = DRIVE_WAITING;
 
     self->encoder_baseline_set = 0;
     self->prev_left_encoder_deg = 0;
@@ -365,6 +388,12 @@ reactor Robot(
         self->right_cmd_milli = 0;
 
         self->log_start_time_us = time_us_64();
+        self->log_robot_time_us = 0;
+        self->log_robot_elapsed_us = 0;
+        self->log_logical_elapsed_us = 0;
+        self->log_sample_period_us = 0;
+        self->log_sample = 0;
+        self->log_drive_mode = DRIVE_FORWARD;
 
         self->encoder_baseline_set = 0;
         self->prev_left_encoder_deg = 0;
@@ -408,7 +437,19 @@ reactor Robot(
     self->gyro_z_deg = gyro.z->value;
   =}
 
-  reaction(encoder.left, encoder.right) -> motors.left_power, motors.right_power, display0, display1, display2 {=
+  reaction(encoder.left, encoder.right) -> motors.left_power, motors.right_power, display0, display1, display2,
+      bump_log.bump_left,
+      bump_log.bump_right,
+      left_encoder_log.encoder_deg,
+      left_encoder_log.delta_encoder_deg,
+      left_encoder_log.distance_m,
+      left_encoder_log.cmd_milli,
+      right_encoder_log.encoder_deg,
+      right_encoder_log.delta_encoder_deg,
+      right_encoder_log.distance_m,
+      right_encoder_log.cmd_milli,
+      imu_log.gyro_z_deg,
+      imu_log.turn_target_deg {=
     uint64_t now_us = time_us_64();
     uint64_t elapsed_us = now_us - self->log_start_time_us;
 
@@ -622,31 +663,28 @@ reactor Robot(
       lf_set(motors.right_power, 0.0f);
     }
 
-    if (self->log_count < LOG_CAPACITY) {
-      log_row_t* row = &log_buffer[self->log_count++];
+    self->log_robot_time_us = now_us;
+    self->log_robot_elapsed_us = elapsed_us;
+    self->log_logical_elapsed_us = (uint64_t)(lf_time_logical_elapsed() / 1000LL);
+    self->log_sample_period_us = (uint64_t)(self->sample_period / 1000LL);
+    self->log_sample = self->sample_index++;
+    self->log_drive_mode = self->drive_mode;
 
-      row->robot_time_us = now_us;
-      row->robot_elapsed_us = elapsed_us;
-      row->sample = self->sample_index++;
-      row->drive_mode = self->drive_mode;
-      row->bump_left = bump_left;
-      row->bump_right = bump_right;
-      row->left_encoder_deg = self->left_encoder_deg;
-      row->right_encoder_deg = self->right_encoder_deg;
-      row->delta_left_encoder_deg = self->delta_left_encoder_deg;
-      row->delta_right_encoder_deg = self->delta_right_encoder_deg;
-      row->left_distance_m = self->left_distance_m;
-      row->right_distance_m = self->right_distance_m;
-      row->x_m = self->x_m;
-      row->y_m = self->y_m;
-      row->theta_deg = self->theta_rad * 180.0f / PI_F;
-      row->gyro_z_deg = self->gyro_z_deg;
-      row->turn_target_deg = self->turn_target_deg;
-      row->left_cmd_milli = self->left_cmd_milli;
-      row->right_cmd_milli = self->right_cmd_milli;
-    } else {
-      self->log_overflow = 1;
-    }
+    lf_set(bump_log.bump_left, bump_left);
+    lf_set(bump_log.bump_right, bump_right);
+
+    lf_set(left_encoder_log.encoder_deg, self->left_encoder_deg);
+    lf_set(left_encoder_log.delta_encoder_deg, self->delta_left_encoder_deg);
+    lf_set(left_encoder_log.distance_m, self->left_distance_m);
+    lf_set(left_encoder_log.cmd_milli, self->left_cmd_milli);
+
+    lf_set(right_encoder_log.encoder_deg, self->right_encoder_deg);
+    lf_set(right_encoder_log.delta_encoder_deg, self->delta_right_encoder_deg);
+    lf_set(right_encoder_log.distance_m, self->right_distance_m);
+    lf_set(right_encoder_log.cmd_milli, self->right_cmd_milli);
+
+    lf_set(imu_log.gyro_z_deg, self->gyro_z_deg);
+    lf_set(imu_log.turn_target_deg, self->turn_target_deg);
 
     self->bump_left_pending = 0;
     self->bump_right_pending = 0;
@@ -662,6 +700,55 @@ reactor Robot(
     static char buf2[17];
     snprintf(buf2, 17, "g:%.1f t:%.0f", self->gyro_z_deg, self->turn_target_deg);
     lf_set(display2, buf2);
+  =}
+
+
+  reaction(
+      bump_log.logged_bump_left,
+      bump_log.logged_bump_right,
+      left_encoder_log.logged_encoder_deg,
+      left_encoder_log.logged_delta_encoder_deg,
+      left_encoder_log.logged_distance_m,
+      left_encoder_log.logged_cmd_milli,
+      right_encoder_log.logged_encoder_deg,
+      right_encoder_log.logged_delta_encoder_deg,
+      right_encoder_log.logged_distance_m,
+      right_encoder_log.logged_cmd_milli,
+      imu_log.logged_gyro_z_deg,
+      imu_log.logged_turn_target_deg
+  ) {=
+    if (self->log_count < LOG_CAPACITY) {
+      log_row_t* row = &log_buffer[self->log_count++];
+
+      row->robot_time_us = self->log_robot_time_us;
+      row->robot_elapsed_us = self->log_robot_elapsed_us;
+      row->logical_elapsed_us = self->log_logical_elapsed_us;
+      row->sample_period_us = self->log_sample_period_us;
+      row->sample = self->log_sample;
+      row->drive_mode = self->log_drive_mode;
+
+      row->bump_left = bump_log.logged_bump_left->value;
+      row->bump_right = bump_log.logged_bump_right->value;
+
+      row->left_encoder_deg = left_encoder_log.logged_encoder_deg->value;
+      row->right_encoder_deg = right_encoder_log.logged_encoder_deg->value;
+      row->delta_left_encoder_deg = left_encoder_log.logged_delta_encoder_deg->value;
+      row->delta_right_encoder_deg = right_encoder_log.logged_delta_encoder_deg->value;
+      row->left_distance_m = left_encoder_log.logged_distance_m->value;
+      row->right_distance_m = right_encoder_log.logged_distance_m->value;
+
+      row->x_m = self->x_m;
+      row->y_m = self->y_m;
+      row->theta_deg = self->theta_rad * 180.0f / PI_F;
+
+      row->gyro_z_deg = imu_log.logged_gyro_z_deg->value;
+      row->turn_target_deg = imu_log.logged_turn_target_deg->value;
+
+      row->left_cmd_milli = left_encoder_log.logged_cmd_milli->value;
+      row->right_cmd_milli = right_encoder_log.logged_cmd_milli->value;
+    } else {
+      self->log_overflow = 1;
+    }
   =}
 }
 

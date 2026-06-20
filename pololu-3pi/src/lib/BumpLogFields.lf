@@ -1,0 +1,20 @@
+target C {
+  platform: {
+    name: "rp2040",
+    board: "pololu_3pi_2040_robot"
+  },
+  single-threaded: true
+}
+
+reactor BumpLogFields {
+  input bump_left: int
+  input bump_right: int
+
+  output logged_bump_left: int
+  output logged_bump_right: int
+
+  reaction(bump_left, bump_right) -> logged_bump_left, logged_bump_right {=
+    lf_set(logged_bump_left, bump_left->value);
+    lf_set(logged_bump_right, bump_right->value);
+  =}
+}

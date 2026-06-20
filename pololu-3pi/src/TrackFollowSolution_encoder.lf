@@ -10,17 +10,147 @@ import Display from "lib/Display.lf"
 import Motors from "lib/Motors.lf"
 import Line from "lib/Line.lf"
 import Encoders from "lib/Encoders.lf"
+import LineSensorLogFields from "lib/LineSensorLogFields.lf"
+import EncoderLogFields from "lib/EncoderLogFields.lf"
 
 preamble {=
   #include <stdio.h>
   #include <stdint.h>
   #include <math.h>
   #include <pico/time.h>
+  #include <pico/stdlib.h>
+  #include <hardware/gpio.h>
 
   #define WHEEL_RADIUS_M 0.016f
   #define WHEEL_BASE_M 0.095f
   #define PI_F 3.14159265358979323846f
   #define ENCODER_DEG_TO_M ((2.0f * PI_F * WHEEL_RADIUS_M) / 360.0f)
+
+  #define LOG_CAPACITY 2500
+
+  typedef struct {
+    uint64_t robot_time_us;
+    uint64_t robot_elapsed_us;
+    uint64_t logical_elapsed_us;
+    uint64_t sample_period_us;
+    uint32_t sample;
+    int mode;
+    uint16_t s0;
+    uint16_t s1;
+    uint16_t s2;
+    uint16_t s3;
+    uint16_t s4;
+    int32_t left_encoder_deg;
+    int32_t right_encoder_deg;
+    int32_t delta_left_encoder_deg;
+    int32_t delta_right_encoder_deg;
+    float left_distance_m;
+    float right_distance_m;
+    float x_m;
+    float y_m;
+    float theta_deg;
+    int current_state;
+    int prev_state;
+    int lost_count;
+    int left_cmd_milli;
+    int right_cmd_milli;
+  } log_row_t;
+
+  static log_row_t log_buffer[LOG_CAPACITY];
+
+  static const char* line_log_mode_name(int mode) {
+    return mode == 0 ? "DRIVING" : "STOP";
+  }
+
+  static void dump_log_buffer(int count) {
+    printf("robot_time_us,robot_elapsed_us,logical_elapsed_us,sample_period_us,sample,mode,s0,s1,s2,s3,s4,left_encoder_deg,right_encoder_deg,delta_left_encoder_deg,delta_right_encoder_deg,left_distance_m,right_distance_m,x_m,y_m,theta_deg,current_state,prev_state,lost_count,left_cmd_milli,right_cmd_milli\n");
+
+    for (int i = 0; i < count; i++) {
+      printf(
+        "%llu,%llu,%llu,%llu,%lu,%s,%u,%u,%u,%u,%u,%ld,%ld,%ld,%ld,%.5f,%.5f,%.5f,%.5f,%.3f,%d,%d,%d,%d,%d\n",
+        (unsigned long long) log_buffer[i].robot_time_us,
+        (unsigned long long) log_buffer[i].robot_elapsed_us,
+        (unsigned long long) log_buffer[i].logical_elapsed_us,
+        (unsigned long long) log_buffer[i].sample_period_us,
+        (unsigned long) log_buffer[i].sample,
+        line_log_mode_name(log_buffer[i].mode),
+        log_buffer[i].s0,
+        log_buffer[i].s1,
+        log_buffer[i].s2,
+        log_buffer[i].s3,
+        log_buffer[i].s4,
+        (long) log_buffer[i].left_encoder_deg,
+        (long) log_buffer[i].right_encoder_deg,
+        (long) log_buffer[i].delta_left_encoder_deg,
+        (long) log_buffer[i].delta_right_encoder_deg,
+        log_buffer[i].left_distance_m,
+        log_buffer[i].right_distance_m,
+        log_buffer[i].x_m,
+        log_buffer[i].y_m,
+        log_buffer[i].theta_deg,
+        log_buffer[i].current_state,
+        log_buffer[i].prev_state,
+        log_buffer[i].lost_count,
+        log_buffer[i].left_cmd_milli,
+        log_buffer[i].right_cmd_milli
+      );
+    }
+
+    fflush(stdout);
+  }
+
+  #define BUTTON_A_PIN 25
+  #define BUTTON_C_PIN 0
+  #define BUTTON_DEBOUNCE_US 50000U
+
+  static int button_a_last = 0;
+  static int button_c_last = 0;
+  static uint32_t button_a_last_time_us = 0;
+  static uint32_t button_c_last_time_us = 0;
+
+  static int button_a_raw_pressed(void) {
+    gpio_init(BUTTON_A_PIN);
+    gpio_set_dir(BUTTON_A_PIN, GPIO_IN);
+    gpio_pull_up(BUTTON_A_PIN);
+    return gpio_get(BUTTON_A_PIN) == 0;
+  }
+
+  static int button_c_raw_pressed(void) {
+    gpio_set_oeover(BUTTON_C_PIN, GPIO_OVERRIDE_LOW);
+    gpio_pull_up(BUTTON_C_PIN);
+    sleep_us(1);
+    int pressed = gpio_get(BUTTON_C_PIN) == 0;
+    gpio_set_oeover(BUTTON_C_PIN, GPIO_OVERRIDE_NORMAL);
+    return pressed;
+  }
+
+  static int button_a_pressed_edge(void) {
+    int pressed = button_a_raw_pressed();
+    uint32_t now = time_us_32();
+
+    if (pressed != button_a_last &&
+        (uint32_t)(now - button_a_last_time_us) > BUTTON_DEBOUNCE_US) {
+      button_a_last = pressed;
+      button_a_last_time_us = now;
+      if (pressed) return 1;
+    }
+
+    return 0;
+  }
+
+  static int button_c_pressed_edge(void) {
+    int pressed = button_c_raw_pressed();
+    uint32_t now = time_us_32();
+
+    if (pressed != button_c_last &&
+        (uint32_t)(now - button_c_last_time_us) > BUTTON_DEBOUNCE_US) {
+      button_c_last = pressed;
+      button_c_last_time_us = now;
+      if (pressed) return 1;
+    }
+
+    return 0;
+  }
 =}
 
 reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
@@ -38,8 +168,21 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
   state prev_state: int = 2
   state sample_index: uint32_t = 0
   state run_enabled: int = 0
+  state calibration_done: int = 0
+  state log_count: int = 0
+  state log_overflow: int = 0
 
   state log_start_time_us: uint64_t = 0
+
+  state log_robot_time_us: uint64_t = 0
+  state log_robot_elapsed_us: uint64_t = 0
+  state log_logical_elapsed_us: uint64_t = 0
+  state log_sample_period_us: uint64_t = 0
+  state log_sample: uint32_t = 0
+  state log_mode: int = 0
+  state log_x_m: float = 0.0
+  state log_y_m: float = 0.0
+  state log_theta_deg: float = 0.0
 
   state encoder_baseline_set: int = 0
   state prev_left_encoder_deg: int32_t = 0
@@ -60,14 +203,29 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
   motors = new Motors()
   line = new Line()
   encoder = new Encoders()
+  line_log = new LineSensorLogFields()
+  left_encoder_log = new EncoderLogFields()
+  right_encoder_log = new EncoderLogFields()
 
   reaction(startup) -> display0, display1, display2, motors.left_power, motors.right_power {=
     self->run_enabled = 0;
+    self->calibration_done = 0;
+    self->log_count = 0;
+    self->log_overflow = 0;
     self->lost_count = 0;
     self->prev_state = 2;
     self->sample_index = 0;
 
     self->log_start_time_us = time_us_64();
+    self->log_robot_time_us = 0;
+    self->log_robot_elapsed_us = 0;
+    self->log_logical_elapsed_us = 0;
+    self->log_sample_period_us = 0;
+    self->log_sample = 0;
+    self->log_mode = 0;
+    self->log_x_m = 0.0f;
+    self->log_y_m = 0.0f;
+    self->log_theta_deg = 0.0f;
 
     self->encoder_baseline_set = 0;
     self->prev_left_encoder_deg = 0;
@@ -103,12 +261,22 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
   reaction(end_calibration) -> line.calibrate, display0, display1, display2 {=
     lf_set(line.calibrate, false);
 
-    self->run_enabled = 1;
+    self->run_enabled = 0;
+    self->calibration_done = 1;
     self->lost_count = 0;
     self->prev_state = 2;
     self->sample_index = 0;
 
     self->log_start_time_us = time_us_64();
+    self->log_robot_time_us = 0;
+    self->log_robot_elapsed_us = 0;
+    self->log_logical_elapsed_us = 0;
+    self->log_sample_period_us = 0;
+    self->log_sample = 0;
+    self->log_mode = 0;
+    self->log_x_m = 0.0f;
+    self->log_y_m = 0.0f;
+    self->log_theta_deg = 0.0f;
 
     self->encoder_baseline_set = 0;
     self->delta_left_encoder_deg = 0;
@@ -121,14 +289,76 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
     self->y_m = 0.0f;
     self->theta_rad = 0.0f;
 
-    lf_set(display0, "LOGGING");
-    lf_set(display1, "LINE+ENC");
-    lf_set(display2, "Run track");
+    lf_set(display0, "READY");
+    lf_set(display1, "A=start C=stop");
+    lf_set(display2, "after calib");
 
     fflush(stdout);
   =}
 
-  reaction(trigger) -> line.trigger, encoder.trigger {=
+  reaction(trigger) -> line.trigger, encoder.trigger, display0, display1, display2, motors.left_power, motors.right_power {=
+    int start_pressed = button_a_pressed_edge();
+    int stop_pressed = button_c_pressed_edge();
+
+    if (start_pressed && self->calibration_done && !self->run_enabled) {
+      if (self->log_mode == 1 && self->log_count > 0) {
+        dump_log_buffer(self->log_count);
+        lf_set(display0, "DUMPED");
+        lf_set(display1, "USB CSV");
+        lf_set(display2, "A=dump again");
+      } else {
+        self->elapsed_seconds = 0;
+        self->sample_index = 0;
+        self->log_count = 0;
+        self->log_overflow = 0;
+
+        self->run_enabled = 1;
+        self->lost_count = 0;
+        self->prev_state = 2;
+
+        self->log_start_time_us = time_us_64();
+        self->log_robot_time_us = 0;
+        self->log_robot_elapsed_us = 0;
+        self->log_logical_elapsed_us = 0;
+        self->log_sample_period_us = 0;
+        self->log_sample = 0;
+        self->log_mode = 0;
+        self->log_x_m = 0.0f;
+        self->log_y_m = 0.0f;
+        self->log_theta_deg = 0.0f;
+
+        self->encoder_baseline_set = 0;
+        self->prev_left_encoder_deg = 0;
+        self->prev_right_encoder_deg = 0;
+        self->delta_left_encoder_deg = 0;
+        self->delta_right_encoder_deg = 0;
+
+        self->left_distance_m = 0.0f;
+        self->right_distance_m = 0.0f;
+        self->x_m = 0.0f;
+        self->y_m = 0.0f;
+        self->theta_rad = 0.0f;
+
+        lf_set(display0, "LOGGING");
+        lf_set(display1, "LINE+ENC");
+        lf_set(display2, "C=stop");
+      }
+    }
+
+    if (stop_pressed && self->run_enabled) {
+      self->run_enabled = 0;
+      self->log_mode = 1;
+
+      lf_set(motors.left_power, 0.0f);
+      lf_set(motors.right_power, 0.0f);
+
+      lf_set(display0, "STOPPED");
+      static char stop_buf[17];
+      snprintf(stop_buf, 17, "rows:%9d", self->log_count);
+      lf_set(display1, stop_buf);
+      lf_set(display2, "A=dump USB");
+    }
+
     lf_set(line.trigger, true);
     lf_set(encoder.trigger, true);
   =}
@@ -174,11 +404,37 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
     self->y_m += ds * sinf(self->theta_rad);
   =}
 
+
   initial mode DRIVING {
-    reaction(line.reflect) -> reset(STOP), motors.left_power, motors.right_power, display0, display1, display2 {=
+    reaction(line.reflect) -> reset(STOP), motors.left_power, motors.right_power, display0, display1, display2,
+        line_log.s0,
+        line_log.s1,
+        line_log.s2,
+        line_log.s3,
+        line_log.s4,
+        line_log.current_state,
+        line_log.prev_state,
+        line_log.lost_count,
+        left_encoder_log.encoder_deg,
+        left_encoder_log.delta_encoder_deg,
+        left_encoder_log.distance_m,
+        left_encoder_log.cmd_milli,
+        right_encoder_log.encoder_deg,
+        right_encoder_log.delta_encoder_deg,
+        right_encoder_log.distance_m,
+        right_encoder_log.cmd_milli {=
       if (!self->run_enabled) {
         lf_set(motors.left_power, 0.0f);
         lf_set(motors.right_power, 0.0f);
+        return;
+      }
+
+      if (!self->run_enabled) {
+        lf_set(motors.left_power, 0.0f);
+        lf_set(motors.right_power, 0.0f);
+        lf_set(display0, "STOPPED");
+        lf_set(display1, "A=dump USB");
+        lf_set(display2, "");
         return;
       }
 
@@ -271,32 +527,37 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
         }
       }
 
-      printf(
-        "%llu,%llu,%lu,DRIVING,%u,%u,%u,%u,%u,%ld,%ld,%ld,%ld,%.5f,%.5f,%.5f,%.5f,%.3f,%d,%d,%d,%d,%d\n",
-        (unsigned long long) now_us,
-        (unsigned long long) elapsed_us,
-        (unsigned long) self->sample_index++,
-        line.reflect->value[0],
-        line.reflect->value[1],
-        line.reflect->value[2],
-        line.reflect->value[3],
-        line.reflect->value[4],
-        (long) self->left_encoder_deg,
-        (long) self->right_encoder_deg,
-        (long) self->delta_left_encoder_deg,
-        (long) self->delta_right_encoder_deg,
-        self->left_distance_m,
-        self->right_distance_m,
-        self->x_m,
-        self->y_m,
-        self->theta_rad * 180.0f / PI_F,
-        current_state,
-        self->prev_state,
-        self->lost_count,
-        left_cmd_milli,
-        right_cmd_milli
-      );
-      fflush(stdout);
+      uint32_t sample = self->sample_index++;
+      float theta_deg = self->theta_rad * 180.0f / PI_F;
+
+      self->log_robot_time_us = now_us;
+      self->log_robot_elapsed_us = elapsed_us;
+      self->log_logical_elapsed_us = (uint64_t)(lf_time_logical_elapsed() / 1000LL);
+      self->log_sample_period_us = (uint64_t)(self->sample_period / 1000LL);
+      self->log_sample = sample;
+      self->log_mode = 0;
+      self->log_x_m = self->x_m;
+      self->log_y_m = self->y_m;
+      self->log_theta_deg = theta_deg;
+
+      lf_set(line_log.s0, line.reflect->value[0]);
+      lf_set(line_log.s1, line.reflect->value[1]);
+      lf_set(line_log.s2, line.reflect->value[2]);
+      lf_set(line_log.s3, line.reflect->value[3]);
+      lf_set(line_log.s4, line.reflect->value[4]);
+      lf_set(line_log.current_state, current_state);
+      lf_set(line_log.prev_state, self->prev_state);
+      lf_set(line_log.lost_count, self->lost_count);
+
+      lf_set(left_encoder_log.encoder_deg, self->left_encoder_deg);
+      lf_set(left_encoder_log.delta_encoder_deg, self->delta_left_encoder_deg);
+      lf_set(left_encoder_log.distance_m, self->left_distance_m);
+      lf_set(left_encoder_log.cmd_milli, left_cmd_milli);
+
+      lf_set(right_encoder_log.encoder_deg, self->right_encoder_deg);
+      lf_set(right_encoder_log.delta_encoder_deg, self->delta_right_encoder_deg);
+      lf_set(right_encoder_log.distance_m, self->right_distance_m);
+      lf_set(right_encoder_log.cmd_milli, right_cmd_milli);
 
       self->prev_state = current_state;
 
@@ -313,7 +574,23 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
   }
 
   mode STOP {
-    reaction(line.reflect) -> display0, display1, display2, motors.left_power, motors.right_power {=
+    reaction(line.reflect) -> display0, display1, display2, motors.left_power, motors.right_power,
+        line_log.s0,
+        line_log.s1,
+        line_log.s2,
+        line_log.s3,
+        line_log.s4,
+        line_log.current_state,
+        line_log.prev_state,
+        line_log.lost_count,
+        left_encoder_log.encoder_deg,
+        left_encoder_log.delta_encoder_deg,
+        left_encoder_log.distance_m,
+        left_encoder_log.cmd_milli,
+        right_encoder_log.encoder_deg,
+        right_encoder_log.delta_encoder_deg,
+        right_encoder_log.distance_m,
+        right_encoder_log.cmd_milli {=
       uint64_t now_us = time_us_64();
       uint64_t elapsed_us = now_us - self->log_start_time_us;
 
@@ -324,36 +601,99 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
       lf_set(motors.left_power, 0.0f);
       lf_set(motors.right_power, 0.0f);
 
-      printf(
-        "%llu,%llu,%lu,STOP,%u,%u,%u,%u,%u,%ld,%ld,%ld,%ld,%.5f,%.5f,%.5f,%.5f,%.3f,%d,%d,%d,%d,%d\n",
-        (unsigned long long) now_us,
-        (unsigned long long) elapsed_us,
-        (unsigned long) self->sample_index++,
-        line.reflect->value[0],
-        line.reflect->value[1],
-        line.reflect->value[2],
-        line.reflect->value[3],
-        line.reflect->value[4],
-        (long) self->left_encoder_deg,
-        (long) self->right_encoder_deg,
-        (long) self->delta_left_encoder_deg,
-        (long) self->delta_right_encoder_deg,
-        self->left_distance_m,
-        self->right_distance_m,
-        self->x_m,
-        self->y_m,
-        self->theta_rad * 180.0f / PI_F,
-        -1,
-        self->prev_state,
-        self->lost_count,
-        0,
-        0
-      );
-      fflush(stdout);
+      uint32_t sample = self->sample_index++;
+      float theta_deg = self->theta_rad * 180.0f / PI_F;
 
-      lf_request_stop();
+      self->log_robot_time_us = now_us;
+      self->log_robot_elapsed_us = elapsed_us;
+      self->log_logical_elapsed_us = (uint64_t)(lf_time_logical_elapsed() / 1000LL);
+      self->log_sample_period_us = (uint64_t)(self->sample_period / 1000LL);
+      self->log_sample = sample;
+      self->log_mode = 1;
+      self->log_x_m = self->x_m;
+      self->log_y_m = self->y_m;
+      self->log_theta_deg = theta_deg;
+
+      lf_set(line_log.s0, line.reflect->value[0]);
+      lf_set(line_log.s1, line.reflect->value[1]);
+      lf_set(line_log.s2, line.reflect->value[2]);
+      lf_set(line_log.s3, line.reflect->value[3]);
+      lf_set(line_log.s4, line.reflect->value[4]);
+      lf_set(line_log.current_state, -1);
+      lf_set(line_log.prev_state, self->prev_state);
+      lf_set(line_log.lost_count, self->lost_count);
+
+      lf_set(left_encoder_log.encoder_deg, self->left_encoder_deg);
+      lf_set(left_encoder_log.delta_encoder_deg, self->delta_left_encoder_deg);
+      lf_set(left_encoder_log.distance_m, self->left_distance_m);
+      lf_set(left_encoder_log.cmd_milli, 0);
+
+      lf_set(right_encoder_log.encoder_deg, self->right_encoder_deg);
+      lf_set(right_encoder_log.delta_encoder_deg, self->delta_right_encoder_deg);
+      lf_set(right_encoder_log.distance_m, self->right_distance_m);
+      lf_set(right_encoder_log.cmd_milli, 0);
+
+      self->run_enabled = 0;
+      self->log_mode = 1;
     =}
   }
+
+  reaction(
+      line_log.logged_s0,
+      line_log.logged_s1,
+      line_log.logged_s2,
+      line_log.logged_s3,
+      line_log.logged_s4,
+      line_log.logged_current_state,
+      line_log.logged_prev_state,
+      line_log.logged_lost_count,
+      left_encoder_log.logged_encoder_deg,
+      left_encoder_log.logged_delta_encoder_deg,
+      left_encoder_log.logged_distance_m,
+      left_encoder_log.logged_cmd_milli,
+      right_encoder_log.logged_encoder_deg,
+      right_encoder_log.logged_delta_encoder_deg,
+      right_encoder_log.logged_distance_m,
+      right_encoder_log.logged_cmd_milli
+  ) {=
+    if (self->log_count < LOG_CAPACITY) {
+      log_row_t* row = &log_buffer[self->log_count++];
+
+      row->robot_time_us = self->log_robot_time_us;
+      row->robot_elapsed_us = self->log_robot_elapsed_us;
+      row->logical_elapsed_us = self->log_logical_elapsed_us;
+      row->sample_period_us = self->log_sample_period_us;
+      row->sample = self->log_sample;
+      row->mode = self->log_mode;
+
+      row->s0 = line_log.logged_s0->value;
+      row->s1 = line_log.logged_s1->value;
+      row->s2 = line_log.logged_s2->value;
+      row->s3 = line_log.logged_s3->value;
+      row->s4 = line_log.logged_s4->value;
+
+      row->left_encoder_deg = left_encoder_log.logged_encoder_deg->value;
+      row->right_encoder_deg = right_encoder_log.logged_encoder_deg->value;
+      row->delta_left_encoder_deg = left_encoder_log.logged_delta_encoder_deg->value;
+      row->delta_right_encoder_deg = right_encoder_log.logged_delta_encoder_deg->value;
+      row->left_distance_m = left_encoder_log.logged_distance_m->value;
+      row->right_distance_m = right_encoder_log.logged_distance_m->value;
+
+      row->x_m = self->log_x_m;
+      row->y_m = self->log_y_m;
+      row->theta_deg = self->log_theta_deg;
+
+      row->current_state = line_log.logged_current_state->value;
+      row->prev_state = line_log.logged_prev_state->value;
+      row->lost_count = line_log.logged_lost_count->value;
+
+      row->left_cmd_milli = left_encoder_log.logged_cmd_milli->value;
+      row->right_cmd_milli = right_encoder_log.logged_cmd_milli->value;
+    } else {
+      self->log_overflow = 1;
+    }
+  =}
+
 }
 
 main reactor {

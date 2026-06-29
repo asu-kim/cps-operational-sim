@@ -1,70 +1,95 @@
-# Lingua Franca Drone Workflow
+# Lingua Franca Drone Obstacle-Avoidance Workflow
 
 ## Overview
 
-This directory contains the Lingua Franca drone workflow for running the avoidance controller with either live time-of-flight sensors or recorded CSV data.
+This directory contains the Lingua Franca (LF) drone workflow used for the drone obstacle-avoidance case study.
 
-The workflow has two execution modes:
+The workflow has two modes:
 
-1. **Hardware mode** using live ToF sensors and MSP RC output: `src/test.lf`
-2. **Simulation mode** using recorded ToF CSV files and log-only RC output: [simulation](simulation/README.md)
+1. **Hardware-oriented mode** using live ToF readings and MSP RC output.
+2. **CSV simulation mode** using recorded ToF readings and log-only RC output.
 
-The shared LF reactors and Python helper scripts are stored in [lib](lib/README.md).
+The CSV simulation mode is the one used to compare original ToF data with obstacle-injected data.
 
 ## Directory Structure
 
-- `src/test.lf`: main hardware demo using live ToF sensors
-- `src/DroneBridgeC.lf`: standalone serial RC bridge experiment
-- `src/avoid_planner_modal.lf`: avoidance planner reactor
-- `lib/`: shared LF reactors and Python ToF/MSP helper scripts
-- `simulation/`: CSV replay workflow for testing the same avoidance logic offline
-
-## Prerequisites
-
-See the repository root [README.md](../README.md) for Python, LF, and package setup.
-
-For hardware mode, the system also expects:
-
-- A configured drone platform or compatible test rig
-- Five ToF sensor streams: `front`, `left`, `right`, `top`, and `bottom`
-- Access to the serial device used for RC/MSP output, for example `/dev/ttyACM0`
-
-## Library Dependencies
-
-For live ToF access:
-
-```bash
-pip install vl53l1x
+```text
+drone/
+  src/
+    test.lf                     # hardware-oriented entry point
+    DroneBridgeC.lf
+    avoid_planner_modal.lf
+  lib/
+    ToFBridgeC.lf               # live ToF bridge
+    avoid_planner_modal.lf      # obstacle-avoidance planner
+    msp_sender.lf               # MSP sender or CSV logger
+    UserLandCmd.lf
+    tof_reader.py
+    tof_logger.py
+  simulation/
+    src/
+      drone.lf                  # CSV simulation entry point in this repo
+      ToFBridgeCSV.lf
 ```
 
-For plotting and simulation:
+## Dependencies
+
+For plotting and CSV analysis:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install numpy pandas matplotlib
 ```
 
-## To Run the Hardware Code
+For live ToF hardware, install the sensor package required by your hardware setup.
 
-Before building, update the imports in `src/test.lf` if they still point to an old absolute path. The local import block should use the repository-local `lib/` directory:
+## CSV Simulation Workflow
 
-```lf
-import PyToF from "../lib/ToFBridgeC.lf"
-import AvoidPlanner from "../lib/avoid_planner_modal.lf"
-import MSPSender from "../lib/msp_sender.lf"
-import UserLandCmd from "../lib/UserLandCmd.lf"
+The simulation replays five ToF CSV streams through the avoid planner and writes RC commands to a CSV file.
+
+The current simulation entry point is:
+
+```text
+drone/simulation/src/drone.lf
 ```
 
-Build and run from the repository root:
+Build from the `drone/` directory:
 
 ```bash
-lfc drone/src/test.lf
-./drone/bin/test
+cd drone
+lfc simulation/src/drone.lf
 ```
 
-## Additional Instructions
+Then run the generated executable from the directory expected by the LF-generated output.
 
-- Check the ToF bus numbers and I2C addresses in `src/test.lf` before flying.
-- Check `MSPSender(port="/dev/ttyACM0")` and change the serial port if your flight controller uses a different device.
-- Run the executable from the repository root because `ToFBridgeC.lf` launches `python3 ./lib/tof_reader.py` relative to the working directory.
-- Press `l` while the program is running to request landing through `UserLandCmd`.
-- Use the CSV simulation workflow first when testing controller changes.
+The simulation source currently chooses the ToF input files and RC output path inside the LF parameters. Update these paths when switching between `Data1`, `Data2`, `Data3`, or `Data4`.
+
+## Hardware-Oriented Workflow
+
+The hardware-oriented source is:
+
+```text
+drone/src/test.lf
+```
+
+Before using it with a physical drone, check:
+
+- ToF sensor wiring and addresses
+- serial device used by `MSPSender`
+- safety and landing behavior
+- whether LF imports use repository-local paths
+
+## Plotting Outputs
+
+Use the repository-level plotting scripts after generating RC output logs:
+
+```bash
+python3 tools/plot_drone_path_compare.py data/drone/rc-out/rc-out.csv data/drone/raw-logs/Data1 data/drone/rc-out/rc-out-2.csv data/drone/raw-logs/Data2 results/drone/simulation/original_vs_obstacle_injected_overlay.pdf
+```
+
+## Notes
+
+- The LF simulation should be treated as a replay of recorded operational data.
+- The output RC logs are stored under `data/drone/rc-out/` in the repository-level data layout.
+- Use the terms **original data** and **obstacle-injected data** for the two-run comparison.

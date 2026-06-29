@@ -2,41 +2,49 @@
 
 ## Overview
 
-This directory contains native Lingua Franca + MuJoCo replay programs for visualizing recorded Pololu 3Pi+ robot data against measured ground-truth tracks and maze walls.
+This directory contains native LF + MuJoCo replay programs for Pololu operational data.
 
-The replay programs do not control the physical robot. They load CSV logs, move a simple MuJoCo robot body along the recorded trajectory, and draw the ground-truth geometry for comparison.
+The replay programs load CSV logs from physical robot executions, move a simple MuJoCo robot body along the recorded pose trace, and draw measured ground-truth geometry for comparison.
+
+The supported replay cases are:
+
+- square-track following
+- stadium-track following
+- bump-based maze exploration
 
 ## Main Files
 
-- `src/MazeTraceReplay.lf`: replays bump-maze data against `models/pololu_maze_ground_truth.xml`
-- `src/RacetrackTraceReplay_oval.lf`: replays stadium track data against `models/pololu_fixed_oval_ground_truth.xml`
-- `src/RacetrackTraceReplay_square.lf`: replays square-track data against `models/pololu_fixed_square_ground_truth.xml`
-- `models/`: generated MuJoCo XML ground-truth models
-- `tools/`: Python generators for measured maze, oval, and square ground-truth XML files
-- `Lingo.toml`: Lingo package definition and app targets
-
-## Prerequisites
-
-You need:
-
-- Lingo
-- Lingua Franca C target support
-- MuJoCo
-- GLFW
-- `mujoco-c` submodule initialized at `../mujoco-c`
-
-Initialize the MuJoCo LF dependency:
-
-```bash
-git submodule update --init --recursive mujoco-c
+```text
+mujoco-pololu-replay/
+  Lingo.toml
+  src/
+    MazeTraceReplay.lf
+    RacetrackTraceReplay_oval.lf
+    RacetrackTraceReplay_square.lf
+  data/
+    maze_log.csv
+    racetrack_log.csv
+    square_log.csv
+    maze_detected_walls.csv
+    maze_detected_walls_error.csv
+  models/
+    pololu_maze_ground_truth.xml
+    pololu_fixed_oval_ground_truth.xml
+    pololu_fixed_square_ground_truth.xml
+  tools/
+    generate_maze_ground_truth_mjcf.py
+    generate_fixed_oval_racetrack_mjcf.py
+    generate_fixed_square_racetrack_mjcf.py
+    analyze_maze_detected_wall_error.py
+    analyze_maze_wall_detection_error.py
 ```
 
-## To Build the Replay Programs
+## Build
 
 From this directory:
 
 ```bash
-cd ~/cps-operational-sim/pololu-3pi/mujoco-pololu-replay
+cd mujoco-pololu-replay
 rm -rf build
 lingo update
 lingo build
@@ -48,7 +56,7 @@ If MuJoCo is installed under `/opt/mujoco`, set:
 export LD_LIBRARY_PATH=/opt/mujoco/lib:$LD_LIBRARY_PATH
 ```
 
-Run one of the replay programs:
+## Run
 
 ```bash
 build/bin/MazeTraceReplay
@@ -56,35 +64,41 @@ build/bin/RacetrackTraceReplayOval
 build/bin/RacetrackTraceReplaySquare
 ```
 
-## CSV Input Logs
+## Expected CSV Inputs
 
-The LF replay sources currently load fixed CSV paths. Before running, copy or rename logs as needed:
+The replay programs use fixed filenames under `mujoco-pololu-replay/data/`:
 
-```bash
-mkdir -p data
-cp ../data/pololu-3pi/raw-logs/pololu_bump_encoder_maze_20260617_163722.csv data/maze_log.csv
-cp ../data/pololu-3pi/raw-logs/pololu_line_encoder_track_follow_20260610_140926.csv data/racetrack_log.csv
-cp ../data/pololu-3pi/raw-logs/pololu_line_encoder_track_follow_20260610_142100.csv data/square_log.csv
+```text
+maze_log.csv       # bump-based maze exploration
+racetrack_log.csv  # stadium-track following
+square_log.csv     # square-track following
 ```
+
+Copy or rename the desired raw logs before replaying.
 
 ## Ground-Truth XML Generation
 
-Generate or refresh measured ground-truth XML files with:
+Refresh the ground-truth XML files with:
 
 ```bash
-./tools/generate_maze_ground_truth_mjcf.py \
-  --out models/pololu_maze_ground_truth.xml
+./tools/generate_maze_ground_truth_mjcf.py --out models/pololu_maze_ground_truth.xml
 
-./tools/generate_fixed_oval_racetrack_mjcf.py \
-  --out models/pololu_fixed_oval_ground_truth.xml
+./tools/generate_fixed_oval_racetrack_mjcf.py --out models/pololu_fixed_oval_ground_truth.xml
 
-./tools/generate_fixed_square_racetrack_mjcf.py \
-  --out models/pololu_fixed_square_ground_truth.xml
+./tools/generate_fixed_square_racetrack_mjcf.py --out models/pololu_fixed_square_ground_truth.xml
 ```
 
-## Additional Instructions
+## Maze Wall-Detection Error
 
-- The maze model uses measured wall coordinates shifted so the robot start is `(0, 0)`.
-- The racetrack models draw the measured ground-truth path using black MuJoCo geoms.
-- Replay accuracy depends on the CSV pose fields, especially `x_m`, `y_m`, and `theta_deg`.
-- Use the Python plotting tools in `../tools/` to inspect the CSV logs before replaying them in MuJoCo.
+The maze replay can visualize detected wall locations generated from bump events. The analysis tools compare detected wall points against the nearest ground-truth wall segment:
+
+```bash
+./tools/analyze_maze_detected_wall_error.py --detected data/maze_detected_walls.csv --xml models/pololu_maze_ground_truth.xml --wall-thickness 0.020
+```
+
+## Notes
+
+- The maze model is shifted so the robot start is `(0, 0)`.
+- Track-following replay uses measured square and stadium ground-truth geometry.
+- Replay accuracy depends on the logged pose fields: `x_m`, `y_m`, and `theta_deg`.
+- If the repository path changes, check the absolute CSV or XML paths inside the LF replay files.

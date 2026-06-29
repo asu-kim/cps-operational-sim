@@ -2,39 +2,30 @@
 
 ## Overview
 
-This directory contains the shared LF reactors and helper scripts used by both the drone hardware workflow and the CSV simulation workflow.
+This directory contains shared LF reactors and Python helpers for the drone obstacle-avoidance workflow.
+
+The same planner and output logic can be used with live ToF streams or CSV-backed ToF replay.
 
 ## Contents
 
-- `ToFBridgeC.lf`: starts `tof_reader.py` and publishes live ToF distance readings
-- `UserLandCmd.lf`: emits a landing command when the user presses `l`
-- `avoid_planner_modal.lf`: modal takeoff, cruise, obstacle avoidance, and landing controller
-- `msp_sender.lf`: sends MSP RC commands to a serial device or logs commands to CSV
-- `tof_reader.py`: Python interface for one ToF sensor stream
-- `tof_logger.py`: helper script for recording ToF streams into CSV files
+- `ToFBridgeC.lf`: live ToF bridge that launches `tof_reader.py`.
+- `UserLandCmd.lf`: user landing command helper.
+- `avoid_planner_modal.lf`: modal obstacle-avoidance planner.
+- `msp_sender.lf`: MSP RC command sender or CSV logger.
+- `tof_reader.py`: Python helper for one live ToF sensor stream.
+- `tof_logger.py`: helper for recording ToF streams into CSV files.
 
-## Prerequisites
+## MSP Sender Modes
 
-See the drone [README.md](../README.md) and repository root [README.md](../../README.md) for the full setup.
+`msp_sender.lf` can operate in two modes:
 
-Install the Python packages needed by the workflows you are using:
+- serial mode when `port` is a device path, such as `/dev/ttyACM0`
+- log-only mode when `port=""`
 
-```bash
-pip install numpy pandas matplotlib vl53l1x
-```
+The CSV simulation uses log-only mode to write RC command outputs.
 
-## Usage
+## Notes
 
-These files are imported by:
-
-- `drone/src/test.lf` for hardware execution
-- `drone/simulation/src/test.lf` for CSV simulation
-
-## Additional Instructions
-
-- Use relative imports from the LF entry point so the project can run on another machine.
-- `msp_sender.lf` can operate in two modes:
-  - serial mode when `port` is set to a device such as `/dev/ttyACM0`
-  - log-only mode when `port=""`
-- `tof_logger.py` can be used to create new `front.csv`, `left.csv`, `right.csv`, `top.csv`, and `bottom.csv` files for later replay.
-- Keep the sample period consistent between ToF logging, LF simulation, and RC-output plotting.
+- Keep sensor sample periods consistent across ToF capture, LF replay, and plotting.
+- Use repository-local LF imports when possible so the project can run on another machine.
+- The five sensor names used throughout the project are `front`, `left`, `right`, `top`, and `bottom`.

@@ -2,25 +2,28 @@
 
 ## Overview
 
-This directory stores generated plots, reports, and other experiment outputs. Files here should be reproducible from the raw logs in `data/` and the scripts in `tools/` or `mujoco-pololu-replay/tools/`.
+This directory stores generated figures and reports. Files here should be reproducible from logs in `data/` and scripts in `tools/` or `mujoco-pololu-replay/tools/`.
 
 ## Directory Structure
 
-- `drone/simulation/`: drone path plots and original-vs-modified comparison PDFs
-
-## Regenerating Drone Results
-
-From the repository root:
-
-```bash
-python3 tools/plot_drone_path_compare.py \
-  data/drone/processed/rc-out.csv data/drone/raw-logs/Data1 \
-  data/drone/processed/rc-out-2.csv data/drone/raw-logs/Data2 \
-  results/drone/simulation/original_vs_modified_overlay.pdf
+```text
+results/
+  drone/
+    simulation/
+      *.pdf
 ```
 
-## Additional Instructions
+## Drone Obstacle-Avoidance Plots
 
-- Keep generated figures in `results/`.
-- Keep cleaned CSVs and map-specific intermediate files in `data/` when they are inputs to additional analysis.
-- Include enough information in filenames to identify the run or dataset being compared.
+Generate a comparison between original and obstacle-injected data:
+
+```bash
+python3 tools/plot_drone_path_compare.py data/drone/rc-out/rc-out.csv data/drone/raw-logs/Data1 data/drone/rc-out/rc-out-2.csv data/drone/raw-logs/Data2 results/drone/simulation/original_vs_obstacle_injected_overlay.pdf
+```
+
+## Notes
+
+- Keep generated plots in `results/`.
+- Keep raw logs in `data/`.
+- Use descriptive filenames that identify the dataset or experiment being compared.
+- Regenerate figures after changing plotting scripts, data, or ground-truth geometry.

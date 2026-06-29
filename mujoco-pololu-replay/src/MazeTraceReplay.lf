@@ -25,7 +25,20 @@ preamble {=
     double y;
     double theta_deg;
     int64_t elapsed_us;
+    char mode[32];
+    int bump_left;
+    int bump_right;
   } pose_row_t;
+
+  typedef struct {
+    double x;
+    double y;
+    int is_both;
+  } detected_wall_point_t;
+
+  #define MAX_DETECTED_WALLS 5000
+  static detected_wall_point_t detected_walls[MAX_DETECTED_WALLS];
+  static int detected_wall_count = 0;
 
   typedef struct {
     mjModel* m;
@@ -41,6 +54,9 @@ preamble {=
   static int x_idx = -1;
   static int y_idx = -1;
   static int theta_idx = -1;
+  static int mode_idx = -1;
+  static int bump_left_idx = -1;
+  static int bump_right_idx = -1;
   static int elapsed_idx = -1;
   static int robot_time_idx = -1;
 
@@ -75,6 +91,9 @@ preamble {=
     x_idx = -1;
     y_idx = -1;
     theta_idx = -1;
+    mode_idx = -1;
+    bump_left_idx = -1;
+    bump_right_idx = -1;
     elapsed_idx = -1;
     robot_time_idx = -1;
 
@@ -87,6 +106,12 @@ preamble {=
         y_idx = i;
       } else if (strcmp(fields[i], "theta_deg") == 0) {
         theta_idx = i;
+      } else if (strcmp(fields[i], "mode") == 0) {
+        mode_idx = i;
+      } else if (strcmp(fields[i], "bump_left") == 0) {
+        bump_left_idx = i;
+      } else if (strcmp(fields[i], "bump_right") == 0) {
+        bump_right_idx = i;
       } else if (strcmp(fields[i], "robot_elapsed_us") == 0) {
         elapsed_idx = i;
       } else if (strcmp(fields[i], "robot_time_us") == 0) {
@@ -158,6 +183,22 @@ preamble {=
       rows[row_count].theta_deg = atof(fields[theta_idx]);
       rows[row_count].elapsed_us = t_us - first_elapsed_us;
 
+      rows[row_count].mode[0] = '\0';
+      if (mode_idx >= 0 && mode_idx < n) {
+        snprintf(rows[row_count].mode, sizeof(rows[row_count].mode), "%s", fields[mode_idx]);
+      }
+
+      rows[row_count].bump_left = 0;
+      rows[row_count].bump_right = 0;
+
+      if (bump_left_idx >= 0 && bump_left_idx < n) {
+        rows[row_count].bump_left = atoi(fields[bump_left_idx]);
+      }
+
+      if (bump_right_idx >= 0 && bump_right_idx < n) {
+        rows[row_count].bump_right = atoi(fields[bump_right_idx]);
+      }
+
       if (row_count > 0 && rows[row_count].elapsed_us < rows[row_count - 1].elapsed_us) {
         fprintf(stderr,
           "WARNING: non-monotonic timestamp at row %d: %lld us after %lld us. Clamping.\n",
@@ -192,6 +233,300 @@ preamble {=
         printf("Using robot_time_us for LF logical-time scheduling.\n");
       }
     }
+    fflush(stdout);
+  }
+
+
+  static void load_detected_walls(const char* path) {
+    FILE* f = fopen(path, "r");
+    if (!f) {
+      fprintf(stderr, "WARNING: Could not open detected wall CSV: %s\n", path);
+      detected_wall_count = 0;
+      return;
+    }
+
+    char line[LINE_BUF];
+
+    if (!fgets(line, sizeof(line), f)) {
+      fclose(f);
+      detected_wall_count = 0;
+      return;
+    }
+
+    strip(line);
+
+    char* header_fields[MAX_FIELDS];
+    int hn = split_csv(line, header_fields, MAX_FIELDS);
+
+    int x_i = -1;
+    int y_i = -1;
+    int type_i = -1;
+
+    for (int i = 0; i < hn; i++) {
+      strip(header_fields[i]);
+      if (strcmp(header_fields[i], "detected_wall_x_m") == 0) {
+        x_i = i;
+      } else if (strcmp(header_fields[i], "detected_wall_y_m") == 0) {
+        y_i = i;
+      } else if (strcmp(header_fields[i], "contact_type") == 0) {
+        type_i = i;
+      }
+    }
+
+    detected_wall_count = 0;
+
+    while (fgets(line, sizeof(line), f) && detected_wall_count < MAX_DETECTED_WALLS) {
+      strip(line);
+      if (line[0] == '\0') continue;
+
+      char* fields[MAX_FIELDS];
+      int n = split_csv(line, fields, MAX_FIELDS);
+
+      if (x_i < 0 || y_i < 0 || x_i >= n || y_i >= n) continue;
+
+      detected_walls[detected_wall_count].x = atof(fields[x_i]);
+      detected_walls[detected_wall_count].y = atof(fields[y_i]);
+      detected_walls[detected_wall_count].is_both = 0;
+
+      if (type_i >= 0 && type_i < n) {
+        if (strcmp(fields[type_i], "both") == 0) {
+          detected_walls[detected_wall_count].is_both = 1;
+        }
+      }
+
+      detected_wall_count++;
+    }
+
+    fclose(f);
+
+    printf("Loaded %d detected wall points from %s\n", detected_wall_count, path);
+    fflush(stdout);
+  }
+
+
+  static int streq_mode(const char* a, const char* b) {
+    return strcmp(a, b) == 0;
+  }
+
+  static void extract_detected_walls_from_rows(double forward_offset_m, double lateral_offset_m) {
+    detected_wall_count = 0;
+
+    for (int i = 0; i < row_count && detected_wall_count < MAX_DETECTED_WALLS; i++) {
+      int use_row = 0;
+
+      // Primary rule: use the first row where the robot enters BACKUP.
+      // This is the detected wall point just before/at the reverse maneuver.
+      if (streq_mode(rows[i].mode, "BACKUP")) {
+        if (i == 0 || !streq_mode(rows[i - 1].mode, "BACKUP")) {
+          use_row = 1;
+        }
+      }
+
+      if (!use_row) {
+        continue;
+      }
+
+      double theta = rows[i].theta_deg * M_PI / 180.0;
+      double fx = cos(theta);
+      double fy = sin(theta);
+
+      // Left-normal vector.
+      double lx = -sin(theta);
+      double ly = cos(theta);
+
+      double lateral = 0.0;
+      int is_both = 0;
+
+      if (rows[i].bump_left && !rows[i].bump_right) {
+        lateral = lateral_offset_m;
+      } else if (rows[i].bump_right && !rows[i].bump_left) {
+        lateral = -lateral_offset_m;
+      } else if (rows[i].bump_left && rows[i].bump_right) {
+        lateral = 0.0;
+        is_both = 1;
+      }
+
+      detected_walls[detected_wall_count].x =
+          rows[i].x + forward_offset_m * fx + lateral * lx;
+      detected_walls[detected_wall_count].y =
+          rows[i].y + forward_offset_m * fy + lateral * ly;
+      detected_walls[detected_wall_count].is_both = is_both;
+
+      detected_wall_count++;
+    }
+
+    // Fallback: if mode labels are unavailable, use all bump rows.
+    if (detected_wall_count == 0) {
+      for (int i = 0; i < row_count && detected_wall_count < MAX_DETECTED_WALLS; i++) {
+        if (!rows[i].bump_left && !rows[i].bump_right) {
+          continue;
+        }
+
+        double theta = rows[i].theta_deg * M_PI / 180.0;
+        double fx = cos(theta);
+        double fy = sin(theta);
+        double lx = -sin(theta);
+        double ly = cos(theta);
+
+        double lateral = 0.0;
+        int is_both = 0;
+
+        if (rows[i].bump_left && !rows[i].bump_right) {
+          lateral = lateral_offset_m;
+        } else if (rows[i].bump_right && !rows[i].bump_left) {
+          lateral = -lateral_offset_m;
+        } else {
+          lateral = 0.0;
+          is_both = 1;
+        }
+
+        detected_walls[detected_wall_count].x =
+            rows[i].x + forward_offset_m * fx + lateral * lx;
+        detected_walls[detected_wall_count].y =
+            rows[i].y + forward_offset_m * fy + lateral * ly;
+        detected_walls[detected_wall_count].is_both = is_both;
+
+        detected_wall_count++;
+      }
+    }
+
+    printf("Detected wall points from maze_log.csv: %d\n", detected_wall_count);
+    printf("Detected wall projection: forward %.3f m, lateral %.3f m\n",
+      forward_offset_m,
+      lateral_offset_m
+    );
+    fflush(stdout);
+  }
+
+  static void write_detected_walls_csv(const char* path) {
+    FILE* f = fopen(path, "w");
+    if (!f) {
+      fprintf(stderr, "WARNING: Could not write detected wall CSV: %s\n", path);
+      return;
+    }
+
+    fprintf(f, "detected_wall_x_m,detected_wall_y_m,contact_type\n");
+
+    for (int i = 0; i < detected_wall_count; i++) {
+      fprintf(
+        f,
+        "%.6f,%.6f,%s\n",
+        detected_walls[i].x,
+        detected_walls[i].y,
+        detected_walls[i].is_both ? "both" : "single_or_backup"
+      );
+    }
+
+    fclose(f);
+    printf("Wrote detected wall CSV: %s\n", path);
+    fflush(stdout);
+  }
+
+  static double point_to_segment_distance(
+      double px,
+      double py,
+      double ax,
+      double ay,
+      double bx,
+      double by
+  ) {
+    double vx = bx - ax;
+    double vy = by - ay;
+    double wx = px - ax;
+    double wy = py - ay;
+
+    double denom = vx * vx + vy * vy;
+    if (denom <= 1e-15) {
+      return sqrt((px - ax) * (px - ax) + (py - ay) * (py - ay));
+    }
+
+    double t = (wx * vx + wy * vy) / denom;
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+
+    double cx = ax + t * vx;
+    double cy = ay + t * vy;
+
+    return sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy));
+  }
+
+  static int is_gt_wall_geom(const char* name) {
+    return name && strncmp(name, "gt_wall_", 8) == 0;
+  }
+
+  static double detected_point_to_nearest_gt_wall(
+      mjModel* m,
+      mjData* d,
+      double px,
+      double py
+  ) {
+    double best = 1e9;
+
+    for (int gid = 0; gid < m->ngeom; gid++) {
+      const char* name = mj_id2name(m, mjOBJ_GEOM, gid);
+      if (!is_gt_wall_geom(name)) {
+        continue;
+      }
+
+      // Wall geoms are boxes whose local x-axis is the wall centerline.
+      double half_len = m->geom_size[3 * gid + 0];
+
+      double cx = d->geom_xpos[3 * gid + 0];
+      double cy = d->geom_xpos[3 * gid + 1];
+
+      // Column 0 of the geom rotation matrix = local x-axis in world frame.
+      double ux = d->geom_xmat[9 * gid + 0];
+      double uy = d->geom_xmat[9 * gid + 3];
+
+      double ax = cx - half_len * ux;
+      double ay = cy - half_len * uy;
+      double bx = cx + half_len * ux;
+      double by = cy + half_len * uy;
+
+      double dist = point_to_segment_distance(px, py, ax, ay, bx, by);
+      if (dist < best) {
+        best = dist;
+      }
+    }
+
+    return best;
+  }
+
+  static void analyze_detected_wall_error(mjModel* m, mjData* d) {
+    if (detected_wall_count <= 0) {
+      printf("No detected wall points available for error analysis.\n");
+      return;
+    }
+
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    double max_err = 0.0;
+
+    for (int i = 0; i < detected_wall_count; i++) {
+      double e = detected_point_to_nearest_gt_wall(
+        m,
+        d,
+        detected_walls[i].x,
+        detected_walls[i].y
+      );
+
+      sum += e;
+      sum_sq += e * e;
+      if (e > max_err) {
+        max_err = e;
+      }
+    }
+
+    double mean = sum / detected_wall_count;
+    double rms = sqrt(sum_sq / detected_wall_count);
+
+    printf("\nMAZE DETECTED WALL ERROR REPORT\n");
+    printf("===============================\n");
+    printf("Detected wall points: %d\n", detected_wall_count);
+    printf("Mean error:           %.4f m  (%.2f cm)\n", mean, mean * 100.0);
+    printf("RMS error:            %.4f m  (%.2f cm)\n", rms, rms * 100.0);
+    printf("Max error:            %.4f m  (%.2f cm)\n", max_err, max_err * 100.0);
+    printf("\n");
     fflush(stdout);
   }
 
@@ -286,6 +621,33 @@ preamble {=
     }
   }
 
+
+  static void add_detected_wall_markers(mjvScene* scn) {
+    for (int i = 0; i < detected_wall_count; i++) {
+      if (scn->ngeom >= scn->maxgeom) {
+        return;
+      }
+
+      mjtNum size[3] = {0.018, 0.018, 0.018};
+      mjtNum pos[3] = {detected_walls[i].x, detected_walls[i].y, 0.045};
+
+      float rgba_single[4] = {0.0f, 0.9f, 0.1f, 1.0f};
+      float rgba_both[4] = {1.0f, 0.9f, 0.0f, 1.0f};
+
+      mjvGeom* g = scn->geoms + scn->ngeom;
+      scn->ngeom++;
+
+      mjv_initGeom(
+        g,
+        mjGEOM_SPHERE,
+        size,
+        pos,
+        NULL,
+        detected_walls[i].is_both ? rgba_both : rgba_single
+      );
+    }
+  }
+
   static void render_scene(
       GLFWwindow* window,
       mujoco_view_t* v,
@@ -298,6 +660,8 @@ preamble {=
     mjv_updateScene(v->m, v->d, &v->opt, NULL, &v->cam, mjCAT_ALL, &v->scn);
 
     add_trace_so_far(&v->scn, current_row);
+
+    add_detected_wall_markers(&v->scn);
 
     mjr_render(viewport, &v->scn, &v->con);
 
@@ -362,6 +726,8 @@ main reactor(render_period: time = 16 ms) {
     lf_print("*** Close the window to stop.");
 
     load_csv("/home/pawan/cps-operational-sim/mujoco-pololu-replay/data/maze_log.csv");
+    extract_detected_walls_from_rows(0.045, 0.025);
+    write_detected_walls_csv("/home/pawan/cps-operational-sim/mujoco-pololu-replay/data/maze_detected_walls.csv");
 
     char error[1000] = "Could not load model";
     self->view.m = mj_loadXML("/home/pawan/cps-operational-sim/mujoco-pololu-replay/models/pololu_maze_ground_truth.xml", 0, error, 1000);
@@ -370,6 +736,8 @@ main reactor(render_period: time = 16 ms) {
     }
 
     self->view.d = mj_makeData(self->view.m);
+    mj_forward(self->view.m, self->view.d);
+    analyze_detected_wall_error(self->view.m, self->view.d);
 
     if (!glfwInit()) {
       mju_error("Could not initialize GLFW");
@@ -457,7 +825,8 @@ main reactor(render_period: time = 16 ms) {
     snprintf(
       overlay,
       sizeof(overlay),
-      "row %d / %d   robot %.3f s   physical %.3f s   x %.3f   y %.3f   theta %.1f%s",
+      "row %d / %d   robot %.3f s   physical %.3f s   x %.3f   y %.3f   theta %.1f%s\n"
+      "Legend: black = ground truth walls | red = robot path | green = single bump detected wall | yellow = both-bump detected wall",
       i,
       row_count,
       rows[i].elapsed_us / 1000000.0,

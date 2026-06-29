@@ -1,37 +1,37 @@
-# Overview
+# Drone Simulation Results
 
-This directory stores output logs and plots produced by the simulation workflow. It also contains the plotting script used to reconstruct an approximate drone path from RC outputs and recorded ToF sensor data.
+## Overview
 
-## Contents
+This directory is reserved for RC logs and plots produced by the drone CSV simulation workflow. In the current repository layout, most processed drone logs are stored in `data/drone/processed/` and final PDFs are stored in `results/drone/simulation/`.
 
-- `plot_drone_path.py`: generates a path-and-obstacle PDF from an RC log and a ToF data directory
-- `rc-out.csv`, `rc-out-2.csv`, `rc-out-3.csv`: example RC output logs
-- `*.pdf`: example generated plots
+## Typical Outputs
 
-# Prerequisites
+- `rc-out.csv`: RC command log from a simulation run
+- `rc-out-2.csv`, `rc-out-3.csv`, `rc-out-4.csv`: additional simulation runs
+- `*-path-obstacles.pdf`: single-run path and obstacle plot
+- `*_overlay.pdf`: two-run trajectory comparison plot
 
-See the repository root [README.md](../../README.md) for the required Python dependencies.
+## To Generate a Single-Run Plot
 
-### To Run the Code
-
-Run the plotting script with explicit input paths:
-
-```bash
-python3 simulation/results/plot_drone_path.py simulation/results/rc-out-3.csv simulation/data
-```
-
-You can also run it with no arguments. In that case it defaults to:
-
-- RC log: `simulation/results/rc-out.csv`
-- ToF data directory: `simulation/data/`
+From the repository root:
 
 ```bash
-python3 simulation/results/plot_drone_path.py
+python3 tools/plot_drone_path.py \
+  data/drone/processed/rc-out.csv \
+  data/drone/raw-logs/Data1
 ```
 
-### Additional Instructions
+## To Generate a Two-Run Comparison Plot
 
-- Make sure the RC log and the ToF CSV files come from the same run so that the samples line up correctly.
-- The plotting script reads `front`, `left`, `right`, `top`, and `bottom` sensor CSV files from the selected data directory.
-- The script writes a PDF next to the selected RC log using the pattern `<rc-log-name>-path-obstacles.pdf`.
-- If you change the log filename in `simulation/src/test.lf`, pass the new path explicitly to `plot_drone_path.py`.
+```bash
+python3 tools/plot_drone_path_compare.py \
+  data/drone/processed/rc-out.csv data/drone/raw-logs/Data1 \
+  data/drone/processed/rc-out-2.csv data/drone/raw-logs/Data2 \
+  results/drone/simulation/original_vs_modified_overlay.pdf
+```
+
+## Additional Instructions
+
+- Make sure each RC log is paired with the matching ToF sensor directory.
+- The ToF directory must contain `front.csv`, `left.csv`, `right.csv`, `top.csv`, and `bottom.csv`.
+- The plotting tools reconstruct an approximate trajectory from RC commands, so the plots are best used for relative comparison rather than absolute localization.

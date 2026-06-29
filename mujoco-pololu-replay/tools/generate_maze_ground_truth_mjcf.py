@@ -3,34 +3,63 @@ from pathlib import Path
 import math
 import argparse
 
-GROUND_TRUTH_WALLS_M = [
-    # Top-left start corridor
-    ((-0.05,  0.1), (0.26,  0.1)),
+INCH_TO_M = 0.0254
 
-    # Vertical drop after start corridor
-    ((0.26,  0.1), (0.26, -0.035)),
+# Robot start point in drawing coordinates, inches.
+# After translation this becomes MuJoCo/world coordinate (0, 0).
+START_X_IN = -4.85
+START_Y_IN = 15.25
 
-    # Upper middle horizontal wall
-    ((0.26, -0.035), (0.66, -0.035)),
+INNER_X_IN = 12.25
 
-    # Right vertical wall
-    ((0.66, -0.035), (0.66, -0.15)),
+GROUND_TRUTH_WALLS_DRAWING_IN = [
+    # Bottom long wall: 30 in
+    ((0.0, 0.0), (30.0, 0.0)),
 
-    # Short right-side end wall
-    ((0.66, -0.15), (1.0, -0.15)),
+    # Left vertical wall: 12.5 in
+    ((0.0, 0.0), (0.0, 12.5)),
 
-    # Left short horizontal wall below start
-    ((-0.05, -0.035), (0.10, -0.035)),
+    # Left short horizontal wall at the start corridor: 6 in
+    ((-6.0, 12.25), (0.0, 12.25)),
 
-    # Long left vertical wall
-    ((0.10, -0.035), (0.10, -0.38)),
+    # Top-left vertical rise: 6 in
+    ((6.25, 12.25), (6.25, 18.25)),
 
-    # Bottom horizontal wall left side
-    ((0.10, -0.38), (1.0, -0.38)),
+    # Top-left horizontal wall: 12.25 in
+    ((-6.0, 18.25), (6.25, 18.25)),
 
-    # Middle vertical divider near bottom
-    ((0.49, -0.38), (0.49, -0.15)),
+    # Middle horizontal wall
+    ((6.25, 12.25), (20.0, 12.25)),
+
+    # Right vertical drop: 6 in
+    ((20.0, 12.25), (20.0, 6.5)),
+
+    # Right horizontal wall
+    ((20.0, 6.5), (29.75, 6.5)),
+
+    # Inner vertical divider: 6 in
+    ((INNER_X_IN, 0.0), (INNER_X_IN, 6.0)),
 ]
+
+
+def translate_wall_to_robot_start_inches(wall):
+    (x1, y1), (x2, y2) = wall
+    return (
+        (x1 - START_X_IN, y1 - START_Y_IN),
+        (x2 - START_X_IN, y2 - START_Y_IN),
+    )
+
+
+GROUND_TRUTH_WALLS_IN = [
+    translate_wall_to_robot_start_inches(wall)
+    for wall in GROUND_TRUTH_WALLS_DRAWING_IN
+]
+
+GROUND_TRUTH_WALLS_M = [
+    ((x1 * INCH_TO_M, y1 * INCH_TO_M), (x2 * INCH_TO_M, y2 * INCH_TO_M))
+    for (x1, y1), (x2, y2) in GROUND_TRUTH_WALLS_IN
+]
+
 
 def wall_box_xml(name, p1, p2, thickness, height):
     x1, y1 = p1
@@ -47,13 +76,15 @@ def wall_box_xml(name, p1, p2, thickness, height):
 
     angle_deg = math.degrees(math.atan2(dy, dx))
 
+    # MuJoCo box size values are half-extents.
     return (
         f'    <geom name="{name}" type="box" '
         f'pos="{cx:.6f} {cy:.6f} {height / 2.0:.6f}" '
         f'euler="0 0 {angle_deg:.6f}" '
         f'size="{length / 2.0:.6f} {thickness / 2.0:.6f} {height / 2.0:.6f}" '
-        f'material="wall_mat"/>\n'
+        f'material="wall_mat" contype="0" conaffinity="0"/>'
     )
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -96,14 +127,18 @@ def main():
     lines.append('  </asset>')
     lines.append('')
     lines.append('  <worldbody>')
-    lines.append(f'    <geom name="floor" type="plane" size="{floor_sx:.6f} {floor_sy:.6f} 0.02" pos="{floor_cx:.6f} {floor_cy:.6f} 0" material="floor_mat"/>')
+    lines.append(
+        f'    <geom name="floor" type="plane" '
+        f'size="{floor_sx:.6f} {floor_sy:.6f} 0.02" '
+        f'pos="{floor_cx:.6f} {floor_cy:.6f} 0" material="floor_mat"/>'
+    )
     lines.append('')
 
     for i, (p1, p2) in enumerate(GROUND_TRUTH_WALLS_M):
-        lines.append(wall_box_xml(f"gt_wall_{i:03d}", p1, p2, args.wall_thickness, args.wall_height).rstrip())
+        lines.append(wall_box_xml(f"gt_wall_{i:03d}", p1, p2, args.wall_thickness, args.wall_height))
 
     lines.append('')
-    lines.append('    <body name="pololu" pos="0 0 0.04">')
+    lines.append('    <body name="pololu" pos="0 0 0.040000" quat="1 0 0 0">')
     lines.append('      <freejoint name="pololu_free"/>')
     lines.append('      <geom name="robot_body" type="box" size="0.045 0.035 0.02" material="robot_mat"/>')
     lines.append('      <geom name="robot_front" type="box" pos="0.045 0 0.012" size="0.015 0.025 0.01" material="front_mat"/>')
@@ -112,11 +147,19 @@ def main():
     lines.append('</mujoco>')
 
     out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines) + "\n")
+
     print(f"Wrote {out}")
     print(f"Walls: {len(GROUND_TRUTH_WALLS_M)}")
+    print(f"Robot start in MuJoCo: (0.000 m, 0.000 m)")
     print(f"Wall thickness: {args.wall_thickness:.3f} m")
     print(f"Wall height: {args.wall_height:.3f} m")
+    print()
+    print("Wall endpoints in meters, robot-start frame:")
+    for i, (p1, p2) in enumerate(GROUND_TRUTH_WALLS_M):
+        print(f"  gt_wall_{i:03d}: ({p1[0]:+.4f}, {p1[1]:+.4f}) -> ({p2[0]:+.4f}, {p2[1]:+.4f})")
+
 
 if __name__ == "__main__":
     main()

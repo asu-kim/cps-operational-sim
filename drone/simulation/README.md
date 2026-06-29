@@ -1,43 +1,30 @@
-# Overview
+# Drone CSV Simulation
 
-This directory contains the CSV-based simulation workflow for the Lingua Franca drone demo. It replays recorded ToF measurements through the same avoidance logic used by the hardware workflow and logs the resulting RC commands for offline analysis.
+## Overview
+
+This directory contains the CSV-based simulation workflow for the Lingua Franca drone demo. It replays recorded ToF sensor data through the avoidance controller and writes RC commands to a CSV log instead of sending them to a flight controller.
+
+This workflow is useful for testing controller changes without flying the drone.
 
 ## Directory Structure
 
 - `src/test.lf`: main simulation entry point
 - `src/ToFBridgeCSV.lf`: CSV-backed ToF reader used in place of live hardware
-- `data/`: sample ToF input CSV files collected from the drone using ./lib
-- `results/`: RC logs, plots, and plotting utilities
+- `results/`: simulation-specific notes for generated RC logs and plots
 
-# Prerequisites
+The repository-level data folders are:
 
-See the repository root [README.md](../README.md) for the shared software setup and Python dependencies.
+- `../../data/drone/raw-logs/`: zipped ToF sensor datasets such as `Data1.zip` and `Data2.zip`
+- `../../data/drone/processed/`: RC output logs such as `rc-out.csv` and `rc-out-2.csv`
+- `../../results/drone/simulation/`: generated comparison plots
 
-### To Run the Code
+## Prerequisites
 
-```bash
-lfc simulation/src/test.lf
-./simulation/bin/test
-```
+See the repository root [README.md](../../README.md) for Python and LF setup.
 
-### Additional Instructions
+## To Run the Code
 
-- Before running `lfc`, update the hard-coded absolute import paths in `simulation/src/test.lf` so they point to the local files in this repository's `lib/` directory.
-- In this file, `ToFBridgeCSV.lf` is already local to `simulation/src/`, so that import can stay unchanged.
-
-- For example, change:
-
-```lf
-import AvoidPlanner from "/mnt/e/PhD/lf-demos/lf-drone/lib/avoid_planner_modal.lf"
-```
-
-to:
-
-```lf
-import AvoidPlanner from "../../lib/avoid_planner_modal.lf"
-```
-
-- The full import block in `simulation/src/test.lf` should look like this:
+Before building, update the imports in `src/test.lf` if they still point to an old absolute path. The local import block should look like this:
 
 ```lf
 import PyToF from "ToFBridgeCSV.lf"
@@ -46,17 +33,46 @@ import MSPSender from "../../lib/msp_sender.lf"
 import UserLandCmd from "../../lib/UserLandCmd.lf"
 ```
 
-- The current `src/test.lf` file reads sensor data from `simulation/data/`, `bottom.csv`, `front.csv`, `right.csv`, `left.csv`, and `top.csv`.
-- The simulation sets `port=""` in `MSPSender`, so it runs in log-only mode and does not require a real flight controller.
-- The current RC output log path is `simulation/results/rc-out.csv`. You can change that value in `src/test.lf` if you want to create a new log file.
-- Launch the final executable from the repository root so the configured CSV and log paths resolve correctly.
-
-### Verification Instructions
-
-After the simulation finishes, you can generate a path plot from the RC outputs and the ToF CSV files:
+Build and run from the `drone/` directory:
 
 ```bash
-python3 simulation/results/plot_drone_path.py simulation/results/rc-out-file simulation/data
+cd drone
+lfc simulation/src/test.lf
+./simulation/bin/test
 ```
 
-The output PDF is written into `simulation/results/`.
+If `src/test.lf` is still configured to read `simulation/data/Data4`, create that directory or edit the paths before running. For example, from the repository root:
+
+```bash
+mkdir -p drone/simulation/data
+unzip data/drone/raw-logs/Data1.zip -d drone/simulation/data
+```
+
+Then set the five `path=` values in `drone/simulation/src/test.lf` to `simulation/data/Data1/bottom.csv`, `front.csv`, `right.csv`, `left.csv`, and `top.csv`, or change them to another dataset.
+
+## Additional Instructions
+
+- `ToFBridgeCSV.lf` reads CSV files configured in `simulation/src/test.lf`.
+- The five expected sensor files are `bottom.csv`, `front.csv`, `right.csv`, `left.csv`, and `top.csv`.
+- `MSPSender(port="")` disables serial transmission and writes RC commands to a CSV file.
+- Change the `log_path` value in `src/test.lf` when you want to preserve multiple simulation runs.
+- Launch from a directory that matches the relative CSV paths configured in `src/test.lf`.
+
+## Verification Instructions
+
+From the repository root, generate a path plot from the RC outputs and matching ToF data:
+
+```bash
+python3 tools/plot_drone_path.py \
+  data/drone/processed/rc-out.csv \
+  data/drone/raw-logs/Data1
+```
+
+To compare two runs from the repository root:
+
+```bash
+python3 tools/plot_drone_path_compare.py \
+  data/drone/processed/rc-out.csv data/drone/raw-logs/Data1 \
+  data/drone/processed/rc-out-2.csv data/drone/raw-logs/Data2 \
+  results/drone/simulation/original_vs_modified_overlay.pdf
+```

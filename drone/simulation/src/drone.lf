@@ -5,7 +5,7 @@ import AvoidPlanner from "/mnt/e/PhD/lf-demos/lf-drone/lib/avoid_planner_modal.l
 import MSPSender from "/mnt/e/PhD/lf-demos/lf-drone/lib/msp_sender.lf"
 import UserLandCmd from "/mnt/e/PhD/lf-demos/lf-drone/lib/UserLandCmd.lf"
 
-main reactor test {
+main reactor drone {
   bottom = new PyToF(id=0, label="bottom", path="simulation/data/Data4/bottom.csv", start_ms=20 ms, period=20 ms, verbose=1)
   front  = new PyToF(id=1, label="front",  path="simulation/data/Data4/front.csv",  start_ms=20 ms, period=20 ms, verbose=1)
   right  = new PyToF(id=2, label="right",  path="simulation/data/Data4/right.csv",  start_ms=20 ms, period=20 ms, verbose=1)

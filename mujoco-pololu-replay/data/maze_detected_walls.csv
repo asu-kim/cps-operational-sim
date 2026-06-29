@@ -1,0 +1,11 @@
+detected_wall_x_m,detected_wall_y_m,contact_type
+0.233253,0.020418,both
+0.267809,-0.361931,single_or_backup
+0.344298,-0.346834,single_or_backup
+0.470643,-0.235672,single_or_backup
+0.427197,-0.053646,single_or_backup
+0.508635,-0.054012,single_or_backup
+0.637097,-0.123103,single_or_backup
+0.675405,-0.326237,single_or_backup
+0.819317,-0.296641,single_or_backup
+0.819936,-0.164902,single_or_backup

@@ -12,7 +12,7 @@ platform = "Native"
 
 [[app]]
 name = "RacetrackTraceReplayOval"
-main = "src/RacetrackTraceReplay.lf"
+main = "src/RacetrackTraceReplay_oval.lf"
 target = "C"
 platform = "Native"
 

@@ -1,29 +1,70 @@
-# Overview
-This repository contains the working implementation of a Lingua Franca (LF) drone project with two main execution modes:
+# Lingua Franca Drone Workflow
 
-1. **Drone mode** for running with live ToF sensors on hardware: [Drone](drone/README.md)
-2. **Simulation mode** for replaying ToF sensor CSV files and generating RC outputs and plots: [Simulation](simulation/README.md)
+## Overview
 
-The repository is organized into:
-- `lib/` for shared LF reactors and Python utilities
-- `drone/` for the real drone implementation
-- `simulation/` for the CSV-based simulation and plotting pipeline
+This directory contains the Lingua Franca drone workflow for running the avoidance controller with either live time-of-flight sensors or recorded CSV data.
 
-# Prerequisites
-You need to download this repository and have the following installed:
+The workflow has two execution modes:
 
-Python 3
-pip
-Lingua Franca compiler
+1. **Hardware mode** using live ToF sensors and MSP RC output: `src/test.lf`
+2. **Simulation mode** using recorded ToF CSV files and log-only RC output: [simulation](simulation/README.md)
+
+The shared LF reactors and Python helper scripts are stored in [lib](lib/README.md).
+
+## Directory Structure
+
+- `src/test.lf`: main hardware demo using live ToF sensors
+- `src/DroneBridgeC.lf`: standalone serial RC bridge experiment
+- `src/avoid_planner_modal.lf`: avoidance planner reactor
+- `lib/`: shared LF reactors and Python ToF/MSP helper scripts
+- `simulation/`: CSV replay workflow for testing the same avoidance logic offline
+
+## Prerequisites
+
+See the repository root [README.md](../README.md) for Python, LF, and package setup.
+
+For hardware mode, the system also expects:
+
+- A configured drone platform or compatible test rig
+- Five ToF sensor streams: `front`, `left`, `right`, `top`, and `bottom`
+- Access to the serial device used for RC/MSP output, for example `/dev/ttyACM0`
 
 ## Library Dependencies
-The following dependencies are required to run this project.
-  
-```
-pip install numpy matplotlib pandas vl53l1x
 
+For live ToF access:
+
+```bash
+pip install vl53l1x
 ```
-### Notes on Libraries
-1. ```numpy```, ```matplotlib```, and ```pandas``` are used for simulation result processing and plotting.
-2. ```vl53l1x``` is required for live ToF sensor access on the drone.
-3. If you are only running the simulation, you may not need vl53l1x.
+
+For plotting and simulation:
+
+```bash
+pip install numpy pandas matplotlib
+```
+
+## To Run the Hardware Code
+
+Before building, update the imports in `src/test.lf` if they still point to an old absolute path. The local import block should use the repository-local `lib/` directory:
+
+```lf
+import PyToF from "../lib/ToFBridgeC.lf"
+import AvoidPlanner from "../lib/avoid_planner_modal.lf"
+import MSPSender from "../lib/msp_sender.lf"
+import UserLandCmd from "../lib/UserLandCmd.lf"
+```
+
+Build and run from the repository root:
+
+```bash
+lfc drone/src/test.lf
+./drone/bin/test
+```
+
+## Additional Instructions
+
+- Check the ToF bus numbers and I2C addresses in `src/test.lf` before flying.
+- Check `MSPSender(port="/dev/ttyACM0")` and change the serial port if your flight controller uses a different device.
+- Run the executable from the repository root because `ToFBridgeC.lf` launches `python3 ./lib/tof_reader.py` relative to the working directory.
+- Press `l` while the program is running to request landing through `UserLandCmd`.
+- Use the CSV simulation workflow first when testing controller changes.

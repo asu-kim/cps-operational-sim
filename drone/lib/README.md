@@ -1,30 +1,40 @@
-# Overview
+# Drone Shared Library
 
-This directory contains the shared Lingua Franca reactors and helper scripts used by both the hardware and simulation workflows.
+## Overview
+
+This directory contains the shared LF reactors and helper scripts used by both the drone hardware workflow and the CSV simulation workflow.
 
 ## Contents
 
-- `ToFBridgeC.lf`: spawns `lib/tof_reader.py` and publishes live ToF distance readings
+- `ToFBridgeC.lf`: starts `tof_reader.py` and publishes live ToF distance readings
 - `UserLandCmd.lf`: emits a landing command when the user presses `l`
-- `avoid_planner_modal.lf`: modal takeoff, cruise, avoidance, and landing controller
-- `msp_sender.lf`: sends MSP RC commands or logs them to CSV
-- `tof_reader.py`: Python interface to the VL53L1X sensor
-- `tof_logger.py`: helper script to log one or more ToF streams into CSV files
+- `avoid_planner_modal.lf`: modal takeoff, cruise, obstacle avoidance, and landing controller
+- `msp_sender.lf`: sends MSP RC commands to a serial device or logs commands to CSV
+- `tof_reader.py`: Python interface for one ToF sensor stream
+- `tof_logger.py`: helper script for recording ToF streams into CSV files
 
-# Prerequisites
+## Prerequisites
 
-See the repository root [README.md](../README.md) for the required toolchain and Python libraries.
+See the drone [README.md](../README.md) and repository root [README.md](../../README.md) for the full setup.
 
-### To Run the Code
+Install the Python packages needed by the workflows you are using:
 
-These LF files are imported by the programs in:
+```bash
+pip install numpy pandas matplotlib vl53l1x
+```
 
-- `drone/src/test.lf`
-- `simulation/src/test.lf`
+## Usage
 
-### Additional Instructions
+These files are imported by:
 
-- Before running `lfc`, update the old absolute imports in `drone/src/test.lf` and `simulation/src/test.lf` so they point to this local `lib/` directory.
-- `ToFBridgeC.lf` launches `python3 ./lib/tof_reader.py`, so executables that depend on it should be started from the repository root.
-- `msp_sender.lf` supports both serial mode and log-only mode. Setting `port=""` disables serial transmission and keeps only the logging behavior.
-- `tof_logger.py` can be used to record live ToF sensor data into CSV files for later replay in the simulation workflow.
+- `drone/src/test.lf` for hardware execution
+- `drone/simulation/src/test.lf` for CSV simulation
+
+## Additional Instructions
+
+- Use relative imports from the LF entry point so the project can run on another machine.
+- `msp_sender.lf` can operate in two modes:
+  - serial mode when `port` is set to a device such as `/dev/ttyACM0`
+  - log-only mode when `port=""`
+- `tof_logger.py` can be used to create new `front.csv`, `left.csv`, `right.csv`, `top.csv`, and `bottom.csv` files for later replay.
+- Keep the sample period consistent between ToF logging, LF simulation, and RC-output plotting.

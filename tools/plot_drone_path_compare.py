@@ -21,7 +21,7 @@ START_COLOR = '#222222'
 BASE_FONT = 16
 TITLE_FONT = 20
 LABEL_FONT = 18
-LEGEND_FONT = 16
+LEGEND_FONT = 14
 TICK_FONT = 15
 TEXT_FONT = 15
 
@@ -393,7 +393,7 @@ def plot_overlay(run1, label1, run2, label2, out_path):
             color=DATA2_COLOR,
             linewidths=0.9,
             alpha=0.75,
-            label=f'{label2} obstacles',
+            label=f'{label2}',
             zorder=6,
         )
 
@@ -416,7 +416,7 @@ def plot_overlay(run1, label1, run2, label2, out_path):
     ax.grid(True, linewidth=0.6, alpha=0.6)
     ax.set_xlabel('Forward/Back (m)   (+ forward)')
     ax.set_ylabel('Right/Left (m)     (+ right)')
-    ax.set_title(f'{label1} vs {label2} on same axes')
+    ax.set_title(f'{label1} vs {label2}')
 
     legend_handles = [start_handle, line1, end1]
     if obs1 is not None:
@@ -440,8 +440,8 @@ def main(argv):
         )
 
     rc1, data1, rc2, data2 = map(Path, argv[1:5])
-    label1 = data1.name or rc1.stem
-    label2 = data2.name or rc2.stem
+    label1 = "Original data"
+    label2 = "Obstacle injected"
     out_path = Path(argv[5]) if len(argv) == 6 else default_overlay_path(rc1, label1, label2)
 
     run1 = analyze_run(rc1, data1)

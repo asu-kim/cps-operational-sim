@@ -12,4 +12,3 @@ mujoco-pololu-replay/Lingo.lock.bak*
 # MuJoCo replay local data/logs
 mujoco-pololu-replay/Lingo.lock
 mujoco-pololu-replay/MUJOCO_LOG.TXT
-mujoco-pololu-replay/data/*.csv

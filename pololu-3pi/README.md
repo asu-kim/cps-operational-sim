@@ -7,10 +7,7 @@ This directory contains the Lingua Franca (LF) programs used to collect operatio
 The main robot programs are:
 
 - `src/BumpMaze_ENCODER_buttons.lf`: bump-maze exploration with button-controlled logging, bump sensors, encoders, IMU fields, and odometry.
-- `src/BumpMaze_ENCODER.lf`: earlier bump-maze exploration program.
-- `src/TrackFollowSolution_encoder.lf`: track-following program using encoder odometry and line-sensor logging.
-- `src/TrackFollowSolution_encoder_imu.lf`: track-following program using encoder distance and IMU heading for replay-oriented odometry, if present in this checkout.
-- `src/TrackFollowSolution_IMU.lf`: IMU-based track-following support program, if present in this checkout.
+- `src/TrackFollowSolution_encoder_imu.lf`: track-following program using encoder odometry, IMU and line-sensor logging.
 
 Reusable field-level logging reactors are stored in `src/lib/`. The main LF programs own the final CSV row construction so that each sample is emitted as one complete row.
 

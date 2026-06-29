@@ -41,6 +41,8 @@ preamble {=
   static int x_idx = -1;
   static int y_idx = -1;
   static int theta_idx = -1;
+  static int imu_theta_idx = -1;
+  static int gyro_z_idx = -1;
   static int elapsed_idx = -1;
   static int robot_time_idx = -1;
 
@@ -75,6 +77,8 @@ preamble {=
     x_idx = -1;
     y_idx = -1;
     theta_idx = -1;
+    imu_theta_idx = -1;
+    gyro_z_idx = -1;
     elapsed_idx = -1;
     robot_time_idx = -1;
 
@@ -87,6 +91,10 @@ preamble {=
         y_idx = i;
       } else if (strcmp(fields[i], "theta_deg") == 0) {
         theta_idx = i;
+      } else if (strcmp(fields[i], "imu_theta_deg") == 0) {
+        imu_theta_idx = i;
+      } else if (strcmp(fields[i], "gyro_z_deg") == 0) {
+        gyro_z_idx = i;
       } else if (strcmp(fields[i], "robot_elapsed_us") == 0) {
         elapsed_idx = i;
       } else if (strcmp(fields[i], "robot_time_us") == 0) {
@@ -94,8 +102,18 @@ preamble {=
       }
     }
 
+    if (imu_theta_idx >= 0) {
+      theta_idx = imu_theta_idx;
+      printf("Using imu_theta_deg for replay heading.\n");
+    } else if (gyro_z_idx >= 0) {
+      theta_idx = gyro_z_idx;
+      printf("Using gyro_z_deg for replay heading.\n");
+    } else if (theta_idx >= 0) {
+      printf("Using theta_deg for replay heading.\n");
+    }
+
     if (x_idx < 0 || y_idx < 0 || theta_idx < 0) {
-      fprintf(stderr, "ERROR: CSV must contain x_m, y_m, theta_deg columns.\n");
+      fprintf(stderr, "ERROR: CSV must contain x_m, y_m and one heading column: imu_theta_deg, gyro_z_deg, or theta_deg.\n");
       fprintf(stderr, "Detected x_idx=%d y_idx=%d theta_idx=%d\n", x_idx, y_idx, theta_idx);
     }
 
@@ -187,7 +205,7 @@ preamble {=
     if (row_count > 0) {
       printf("Replay time span: %.3f seconds\n", rows[row_count - 1].elapsed_us / 1000000.0);
       if (elapsed_idx >= 0) {
-        printf("Using robot_elapsed_us for LF logical-time scheduling.\n");
+        printf("Using robot_elapsed_us for physical-time replay.\n");
       } else {
         printf("Using robot_time_us for LF logical-time scheduling.\n");
       }

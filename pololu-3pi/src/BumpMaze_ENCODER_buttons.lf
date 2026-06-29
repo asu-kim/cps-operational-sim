@@ -11,9 +11,9 @@ import Motors from "lib/Motors.lf"
 import Encoders from "lib/Encoders.lf"
 import BumpAdjustable from "lib/BumpAdjustable.lf"
 import GyroAngle from "lib/IMU.lf"
-import BumpLogFields from "lib/BumpLogFields.lf"
-import EncoderLogFields from "lib/EncoderLogFields.lf"
-import IMULogFields from "lib/IMULogFields.lf"
+import BumpLog from "lib/BumpLogFields.lf"
+import EncoderLog from "lib/EncoderLogFields.lf"
+import IMULog from "lib/IMULogFields.lf"
 
 preamble {=
   #include <stdio.h>
@@ -260,10 +260,10 @@ reactor Robot(
   encoder = new Encoders()
   bump = new BumpAdjustable(sample_period = 20 ms, calibrate_samples = 80, release_percent = 110, press_percent = 118)
   gyro = new GyroAngle()
-  bump_log = new BumpLogFields()
-  left_encoder_log = new EncoderLogFields()
-  right_encoder_log = new EncoderLogFields()
-  imu_log = new IMULogFields()
+  bump_log = new BumpLog()
+  left_encoder_log = new EncoderLog()
+  right_encoder_log = new EncoderLog()
+  imu_log = new IMULog()
 
   reaction(startup) -> display0, display1, display2, motors.left_power, motors.right_power {=
     self->elapsed_seconds = 0;

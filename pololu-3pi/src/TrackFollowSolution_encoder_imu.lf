@@ -10,8 +10,10 @@ import Display from "lib/Display.lf"
 import Motors from "lib/Motors.lf"
 import Line from "lib/Line.lf"
 import Encoders from "lib/Encoders.lf"
-import LineSensorLogFields from "lib/LineSensorLogFields.lf"
-import EncoderLogFields from "lib/EncoderLogFields.lf"
+import LineLog from "lib/LineSensorLogFields.lf"
+import EncoderLog from "lib/EncoderLogFields.lf"
+import GyroAngle from "lib/IMU.lf"
+import IMULog from "lib/IMULogFields.lf"
 
 preamble {=
   #include <stdio.h>
@@ -26,7 +28,7 @@ preamble {=
   #define PI_F 3.14159265358979323846f
   #define ENCODER_DEG_TO_M ((2.0f * PI_F * WHEEL_RADIUS_M) / 360.0f)
 
-  #define LOG_CAPACITY 2500
+  #define LOG_CAPACITY 1500
 
   typedef struct {
     uint64_t robot_time_us;
@@ -49,6 +51,8 @@ preamble {=
     float x_m;
     float y_m;
     float theta_deg;
+    float encoder_theta_deg;
+    float gyro_z_deg;
     int current_state;
     int prev_state;
     int lost_count;
@@ -63,11 +67,11 @@ preamble {=
   }
 
   static void dump_log_buffer(int count) {
-    printf("robot_time_us,robot_elapsed_us,logical_elapsed_us,sample_period_us,sample,mode,s0,s1,s2,s3,s4,left_encoder_deg,right_encoder_deg,delta_left_encoder_deg,delta_right_encoder_deg,left_distance_m,right_distance_m,x_m,y_m,theta_deg,current_state,prev_state,lost_count,left_cmd_milli,right_cmd_milli\n");
+    printf("robot_time_us,robot_elapsed_us,logical_elapsed_us,sample_period_us,sample,mode,s0,s1,s2,s3,s4,left_encoder_deg,right_encoder_deg,delta_left_encoder_deg,delta_right_encoder_deg,left_distance_m,right_distance_m,x_m,y_m,theta_deg,encoder_theta_deg,gyro_z_deg,current_state,prev_state,lost_count,left_cmd_milli,right_cmd_milli\n");
 
     for (int i = 0; i < count; i++) {
       printf(
-        "%llu,%llu,%llu,%llu,%lu,%s,%u,%u,%u,%u,%u,%ld,%ld,%ld,%ld,%.5f,%.5f,%.5f,%.5f,%.3f,%d,%d,%d,%d,%d\n",
+        "%llu,%llu,%llu,%llu,%lu,%s,%u,%u,%u,%u,%u,%ld,%ld,%ld,%ld,%.5f,%.5f,%.5f,%.5f,%.3f,%.3f,%.3f,%d,%d,%d,%d,%d\n",
         (unsigned long long) log_buffer[i].robot_time_us,
         (unsigned long long) log_buffer[i].robot_elapsed_us,
         (unsigned long long) log_buffer[i].logical_elapsed_us,
@@ -88,6 +92,8 @@ preamble {=
         log_buffer[i].x_m,
         log_buffer[i].y_m,
         log_buffer[i].theta_deg,
+        log_buffer[i].encoder_theta_deg,
+        log_buffer[i].gyro_z_deg,
         log_buffer[i].current_state,
         log_buffer[i].prev_state,
         log_buffer[i].lost_count,
@@ -153,7 +159,7 @@ preamble {=
   }
 =}
 
-reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
+reactor Robot(calibration_time: time = 15 s, sample_period: time = 50 ms) {
   output display0: string
   output display1: string
   output display2: string
@@ -183,6 +189,7 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
   state log_x_m: float = 0.0
   state log_y_m: float = 0.0
   state log_theta_deg: float = 0.0
+  state log_encoder_theta_deg: float = 0.0
 
   state encoder_baseline_set: int = 0
   state prev_left_encoder_deg: int32_t = 0
@@ -199,13 +206,18 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
   state x_m: float = 0.0
   state y_m: float = 0.0
   state theta_rad: float = 0.0
+  state encoder_theta_rad: float = 0.0
+  state gyro_z_deg: float = 0.0
+  state gyro_start_z_deg: float = 0.0
 
   motors = new Motors()
   line = new Line()
   encoder = new Encoders()
-  line_log = new LineSensorLogFields()
-  left_encoder_log = new EncoderLogFields()
-  right_encoder_log = new EncoderLogFields()
+  line_log = new LineLog()
+  left_encoder_log = new EncoderLog()
+  right_encoder_log = new EncoderLog()
+  gyro = new GyroAngle()
+  imu_log = new IMULog()
 
   reaction(startup) -> display0, display1, display2, motors.left_power, motors.right_power {=
     self->run_enabled = 0;
@@ -226,6 +238,7 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
     self->log_x_m = 0.0f;
     self->log_y_m = 0.0f;
     self->log_theta_deg = 0.0f;
+    self->log_encoder_theta_deg = 0.0f;
 
     self->encoder_baseline_set = 0;
     self->prev_left_encoder_deg = 0;
@@ -241,6 +254,9 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
     self->x_m = 0.0f;
     self->y_m = 0.0f;
     self->theta_rad = 0.0f;
+    self->encoder_theta_rad = 0.0f;
+    self->gyro_z_deg = 0.0f;
+    self->gyro_start_z_deg = 0.0f;
 
     lf_set(motors.left_power, 0.0f);
     lf_set(motors.right_power, 0.0f);
@@ -277,6 +293,7 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
     self->log_x_m = 0.0f;
     self->log_y_m = 0.0f;
     self->log_theta_deg = 0.0f;
+    self->log_encoder_theta_deg = 0.0f;
 
     self->encoder_baseline_set = 0;
     self->delta_left_encoder_deg = 0;
@@ -288,6 +305,8 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
     self->x_m = 0.0f;
     self->y_m = 0.0f;
     self->theta_rad = 0.0f;
+    self->encoder_theta_rad = 0.0f;
+    self->gyro_start_z_deg = self->gyro_z_deg;
 
     lf_set(display0, "READY");
     lf_set(display1, "A=start C=stop");
@@ -296,7 +315,7 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
     fflush(stdout);
   =}
 
-  reaction(trigger) -> line.trigger, encoder.trigger, display0, display1, display2, motors.left_power, motors.right_power {=
+  reaction(trigger) -> line.trigger, encoder.trigger, gyro.trigger, display0, display1, display2, motors.left_power, motors.right_power {=
     int start_pressed = button_a_pressed_edge();
     int stop_pressed = button_c_pressed_edge();
 
@@ -326,6 +345,7 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
         self->log_x_m = 0.0f;
         self->log_y_m = 0.0f;
         self->log_theta_deg = 0.0f;
+    self->log_encoder_theta_deg = 0.0f;
 
         self->encoder_baseline_set = 0;
         self->prev_left_encoder_deg = 0;
@@ -338,9 +358,11 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
         self->x_m = 0.0f;
         self->y_m = 0.0f;
         self->theta_rad = 0.0f;
+        self->encoder_theta_rad = 0.0f;
+        self->gyro_start_z_deg = self->gyro_z_deg;
 
         lf_set(display0, "LOGGING");
-        lf_set(display1, "LINE+ENC");
+        lf_set(display1, "LINE+ENC+IMU");
         lf_set(display2, "C=stop");
       }
     }
@@ -361,6 +383,7 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
 
     lf_set(line.trigger, true);
     lf_set(encoder.trigger, true);
+    lf_set(gyro.trigger, true);
   =}
 
   reaction(encoder.left, encoder.right) {=
@@ -398,11 +421,21 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
     float ds = 0.5f * (dl + dr);
     float dtheta = (dr - dl) / WHEEL_BASE_M;
 
-    self->theta_rad += dtheta;
+    self->encoder_theta_rad += dtheta;
+
+    // Use the IMU heading for pose integration and replay orientation.
+    // Encoders still provide distance; IMU reduces heading drift over multiple laps.
+    float imu_heading_deg = self->gyro_z_deg - self->gyro_start_z_deg;
+    self->theta_rad = imu_heading_deg * PI_F / 180.0f;
 
     self->x_m += ds * cosf(self->theta_rad);
     self->y_m += ds * sinf(self->theta_rad);
   =}
+
+  reaction(gyro.z) {=
+    self->gyro_z_deg = gyro.z->value;
+  =}
+
 
 
   initial mode DRIVING {
@@ -422,7 +455,9 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
         right_encoder_log.encoder_deg,
         right_encoder_log.delta_encoder_deg,
         right_encoder_log.distance_m,
-        right_encoder_log.cmd_milli {=
+        right_encoder_log.cmd_milli,
+        imu_log.gyro_z_deg,
+        imu_log.turn_target_deg {=
       if (!self->run_enabled) {
         lf_set(motors.left_power, 0.0f);
         lf_set(motors.right_power, 0.0f);
@@ -529,6 +564,7 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
 
       uint32_t sample = self->sample_index++;
       float theta_deg = self->theta_rad * 180.0f / PI_F;
+      float encoder_theta_deg = self->encoder_theta_rad * 180.0f / PI_F;
 
       self->log_robot_time_us = now_us;
       self->log_robot_elapsed_us = elapsed_us;
@@ -539,6 +575,7 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
       self->log_x_m = self->x_m;
       self->log_y_m = self->y_m;
       self->log_theta_deg = theta_deg;
+      self->log_encoder_theta_deg = encoder_theta_deg;
 
       lf_set(line_log.s0, line.reflect->value[0]);
       lf_set(line_log.s1, line.reflect->value[1]);
@@ -559,6 +596,9 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
       lf_set(right_encoder_log.distance_m, self->right_distance_m);
       lf_set(right_encoder_log.cmd_milli, right_cmd_milli);
 
+      lf_set(imu_log.gyro_z_deg, self->gyro_z_deg - self->gyro_start_z_deg);
+      lf_set(imu_log.turn_target_deg, 0.0f);
+
       self->prev_state = current_state;
 
       if (reset_lost_count == 1) {
@@ -568,7 +608,7 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
       static char buf0[17];
       snprintf(buf0, 17, "state:%9d", current_state);
       lf_set(display0, buf0);
-      lf_set(display1, "line+encoder");
+      lf_set(display1, "line+enc+imu");
       lf_set(display2, "");
     =}
   }
@@ -590,7 +630,9 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
         right_encoder_log.encoder_deg,
         right_encoder_log.delta_encoder_deg,
         right_encoder_log.distance_m,
-        right_encoder_log.cmd_milli {=
+        right_encoder_log.cmd_milli,
+        imu_log.gyro_z_deg,
+        imu_log.turn_target_deg {=
       uint64_t now_us = time_us_64();
       uint64_t elapsed_us = now_us - self->log_start_time_us;
 
@@ -603,6 +645,7 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
 
       uint32_t sample = self->sample_index++;
       float theta_deg = self->theta_rad * 180.0f / PI_F;
+      float encoder_theta_deg = self->encoder_theta_rad * 180.0f / PI_F;
 
       self->log_robot_time_us = now_us;
       self->log_robot_elapsed_us = elapsed_us;
@@ -613,6 +656,7 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
       self->log_x_m = self->x_m;
       self->log_y_m = self->y_m;
       self->log_theta_deg = theta_deg;
+      self->log_encoder_theta_deg = encoder_theta_deg;
 
       lf_set(line_log.s0, line.reflect->value[0]);
       lf_set(line_log.s1, line.reflect->value[1]);
@@ -632,6 +676,9 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
       lf_set(right_encoder_log.delta_encoder_deg, self->delta_right_encoder_deg);
       lf_set(right_encoder_log.distance_m, self->right_distance_m);
       lf_set(right_encoder_log.cmd_milli, 0);
+
+      lf_set(imu_log.gyro_z_deg, self->gyro_z_deg - self->gyro_start_z_deg);
+      lf_set(imu_log.turn_target_deg, 0.0f);
 
       self->run_enabled = 0;
       self->log_mode = 1;
@@ -654,7 +701,8 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
       right_encoder_log.logged_encoder_deg,
       right_encoder_log.logged_delta_encoder_deg,
       right_encoder_log.logged_distance_m,
-      right_encoder_log.logged_cmd_milli
+      right_encoder_log.logged_cmd_milli,
+      imu_log.logged_gyro_z_deg
   ) {=
     if (self->log_count < LOG_CAPACITY) {
       log_row_t* row = &log_buffer[self->log_count++];
@@ -682,6 +730,8 @@ reactor Robot(calibration_time: time = 60 s, sample_period: time = 50 ms) {
       row->x_m = self->log_x_m;
       row->y_m = self->log_y_m;
       row->theta_deg = self->log_theta_deg;
+      row->encoder_theta_deg = self->log_encoder_theta_deg;
+      row->gyro_z_deg = imu_log.logged_gyro_z_deg->value;
 
       row->current_state = line_log.logged_current_state->value;
       row->prev_state = line_log.logged_prev_state->value;

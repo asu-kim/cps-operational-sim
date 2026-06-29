@@ -6,7 +6,7 @@ target C {
   single-threaded: true
 }
 
-reactor BumpLogFields {
+reactor BumpLog {
   input bump_left: int
   input bump_right: int
 

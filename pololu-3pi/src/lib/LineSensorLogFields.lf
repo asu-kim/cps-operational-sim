@@ -6,7 +6,7 @@ target C {
   single-threaded: true
 }
 
-reactor LineSensorLogFields {
+reactor LineLog {
   input s0: uint16_t
   input s1: uint16_t
   input s2: uint16_t

@@ -6,7 +6,7 @@ target C {
   single-threaded: true
 }
 
-reactor EncoderLogFields {
+reactor EncoderLog {
   input encoder_deg: int32_t
   input delta_encoder_deg: int32_t
   input distance_m: float

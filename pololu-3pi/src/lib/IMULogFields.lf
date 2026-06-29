@@ -6,7 +6,7 @@ target C {
   single-threaded: true
 }
 
-reactor IMULogFields {
+reactor IMULog {
   input gyro_z_deg: float
   input turn_target_deg: float
 

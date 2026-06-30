@@ -159,48 +159,9 @@ After this, unplug and reconnect the Pololu robot if it was already connected.
 
 ### 5. MuJoCo Setup for Pololu Replay
 
-The MuJoCo replay project uses `mujoco-c`, GLFW, and MuJoCo installed under `/opt/mujoco`.
+The MuJoCo replay project uses the LF `mujoco-c` package together with MuJoCo and GLFW.
 
-Install GLFW:
-
-```bash
-sudo apt update
-sudo apt install libglfw3-dev
-```
-
-Install MuJoCo v3.2.6 under `/opt/mujoco`:
-
-```bash
-cd /tmp
-wget https://github.com/google-deepmind/mujoco/releases/download/3.2.6/mujoco-3.2.6-linux-x86_64.tar.gz
-tar xvf mujoco-3.2.6-linux-x86_64.tar.gz
-sudo rm -rf /opt/mujoco
-sudo mv mujoco-3.2.6 /opt/mujoco
-```
-
-Before running replay binaries, expose the MuJoCo shared library path:
-
-```bash
-export LD_LIBRARY_PATH=/opt/mujoco/lib:$LD_LIBRARY_PATH
-```
-
-You can add that line to `~/.profile` if you want it to persist:
-
-```bash
-echo 'export LD_LIBRARY_PATH=/opt/mujoco/lib:$LD_LIBRARY_PATH' >> ~/.profile
-```
-
-Install or update Lingo if needed. The replay project uses Lingo to fetch/build LF package dependencies:
-
-```bash
-curl -Ls https://install.lf-lang.org | bash -s nightly lingo
-```
-
-Then check:
-
-```bash
-lingo --version
-```
+Follow the setup and usage instructions in the official [MuJoCo-c](https://github.com/lf-lang/mujoco-c) repository: 
 
 ## Python Environment
 

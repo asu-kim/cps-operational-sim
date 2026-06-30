@@ -68,7 +68,7 @@ preamble {=
     return x < 0.0f ? -x : x;
   }
 
-  #define LOG_CAPACITY 2500
+  #define LOG_CAPACITY 2000
 
   typedef struct {
     uint64_t robot_time_us;

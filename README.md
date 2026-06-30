@@ -44,20 +44,69 @@ cps-operational-sim/
   tools/
 ```
 
-## Prerequisites
+## Setup Instructions
 
-Install the tools needed for the workflows you plan to run:
+The repository has three setup layers:
 
-- Python 3
-- Lingua Franca compiler, `lfc`
-- Lingo, for the MuJoCo replay project
-- MuJoCo and GLFW, for native graphical replay
-- RP2040/Pico toolchain, for Pololu robot builds
-- PowerShell, for the Pololu serial logging scripts on Windows
+1. General LF tooling used by all workflows.
+2. RP2040/Pico tooling used by the Pololu 3Pi+ 2040 programs.
+3. MuJoCo tooling used by the Pololu replay simulations.
 
-Initialize submodules after cloning:
+The commands below are for Ubuntu or WSL Ubuntu. macOS setup is intentionally omitted.
+
+### 1. General Ubuntu Packages
+
+Install the common tools used by the LF embedded workflow:
 
 ```bash
+sudo apt update
+sudo apt install gh git curl openjdk-17-jdk openjdk-17-jre screen cmake make gcc
+```
+
+Install Visual Studio Code if you want the LF and C/C++ editor support:
+
+```bash
+sudo snap install code --classic
+```
+
+Useful VS Code extensions are:
+
+```bash
+code --install-extension ms-vscode.cmake-tools
+code --install-extension ms-vscode.cpptools
+code --install-extension lf-lang.vscode-lingua-franca --pre-release
+code --install-extension marus25.cortex-debug
+```
+
+### 2. Install Lingua Franca CLI Tools
+
+Install the nightly Lingua Franca command-line tools, including `lfc`, `lfd`, and `lff`:
+
+```bash
+curl -Ls https://install.lf-lang.org | bash -s nightly cli
+```
+
+Restart the shell or reload your profile if `lfc` is not immediately found. Check the installation with:
+
+```bash
+lfc --version
+```
+
+If the installer reports a permission error while creating files under `/usr/local/share/lingua-franca`, use the sudo installation path:
+
+```bash
+wget https://raw.githubusercontent.com/lf-lang/installation/main/install.sh
+chmod +x install.sh
+sudo bash install.sh nightly cli
+```
+
+### 3. Clone This Repository and Initialize Submodules
+
+From the parent directory where you want the repository:
+
+```bash
+git clone git@github.com:asu-kim/cps-operational-sim.git
+cd cps-operational-sim
 git submodule update --init --recursive
 ```
 
@@ -66,6 +115,91 @@ The important submodules are:
 ```text
 pololu-3pi/pico-sdk
 mujoco-c
+```
+
+### 4. Pololu 3Pi+ 2040 / RP2040 Non-Nix Setup
+
+The Pololu programs target the RP2040 on the Pololu 3Pi+ 2040 robot. If you are not using Nix, install the Pico SDK, `picotool`, the ARM cross compiler, and the bare-metal C library manually.
+
+Install the ARM/RP2040 build dependencies:
+
+```bash
+sudo apt update
+sudo apt install cmake make gcc gcc-arm-none-eabi libnewlib-arm-none-eabi
+```
+
+This repository already includes the Pico SDK as a submodule. Point `PICO_SDK_PATH` to it:
+
+```bash
+cd ~/cps-operational-sim
+git submodule update --init --recursive pololu-3pi/pico-sdk
+export PICO_SDK_PATH=$PWD/pololu-3pi/pico-sdk
+echo "export PICO_SDK_PATH=$PWD/pololu-3pi/pico-sdk" >> ~/.profile
+```
+
+Build and install `picotool`:
+
+```bash
+cd ~/cps-operational-sim
+git clone https://github.com/raspberrypi/picotool.git external/picotool
+cmake -S external/picotool -B external/picotool/build
+cmake --build external/picotool/build
+sudo cmake --install external/picotool/build
+```
+
+Allow non-root USB access to RP2040 devices:
+
+```bash
+curl -s https://raw.githubusercontent.com/raspberrypi/picotool/master/udev/60-picotool.rules | sudo tee -a /etc/udev/rules.d/60-picotool.rules >/dev/null
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+After this, unplug and reconnect the Pololu robot if it was already connected.
+
+### 5. MuJoCo Setup for Pololu Replay
+
+The MuJoCo replay project uses `mujoco-c`, GLFW, and MuJoCo installed under `/opt/mujoco`.
+
+Install GLFW:
+
+```bash
+sudo apt update
+sudo apt install libglfw3-dev
+```
+
+Install MuJoCo v3.2.6 under `/opt/mujoco`:
+
+```bash
+cd /tmp
+wget https://github.com/google-deepmind/mujoco/releases/download/3.2.6/mujoco-3.2.6-linux-x86_64.tar.gz
+tar xvf mujoco-3.2.6-linux-x86_64.tar.gz
+sudo rm -rf /opt/mujoco
+sudo mv mujoco-3.2.6 /opt/mujoco
+```
+
+Before running replay binaries, expose the MuJoCo shared library path:
+
+```bash
+export LD_LIBRARY_PATH=/opt/mujoco/lib:$LD_LIBRARY_PATH
+```
+
+You can add that line to `~/.profile` if you want it to persist:
+
+```bash
+echo 'export LD_LIBRARY_PATH=/opt/mujoco/lib:$LD_LIBRARY_PATH' >> ~/.profile
+```
+
+Install or update Lingo if needed. The replay project uses Lingo to fetch/build LF package dependencies:
+
+```bash
+curl -Ls https://install.lf-lang.org | bash -s nightly lingo
+```
+
+Then check:
+
+```bash
+lingo --version
 ```
 
 ## Python Environment

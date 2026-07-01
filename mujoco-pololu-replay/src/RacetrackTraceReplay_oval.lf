@@ -3,7 +3,7 @@ target C {
   platform: {
     name: "Linux"
   },
-  cmake-include: "/home/pawan/cps-operational-sim/mujoco-pololu-replay/../mujoco-c/src/include/mujoco.cmake"
+  cmake-include: "../mujoco-c/src/include/mujoco.cmake"
 }
 
 preamble {=
@@ -379,10 +379,10 @@ main reactor(render_period: time = 16 ms) {
     lf_print("*** Row selection uses physical elapsed time matched to robot_elapsed_us.");
     lf_print("*** Close the window to stop.");
 
-    load_csv("/home/pawan/cps-operational-sim/mujoco-pololu-replay/data/racetrack_log.csv");
+    load_csv("data/racetrack_log.csv");
 
     char error[1000] = "Could not load model";
-    self->view.m = mj_loadXML("/home/pawan/cps-operational-sim/mujoco-pololu-replay/models/pololu_fixed_oval_ground_truth.xml", 0, error, 1000);
+    self->view.m = mj_loadXML("models/pololu_fixed_oval_ground_truth.xml", 0, error, 1000);
     if (!self->view.m) {
       mju_error("Load model error: %s", error);
     }
